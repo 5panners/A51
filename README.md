@@ -10,8 +10,8 @@ A browser helicopter sim over the real terrain around Groom Lake (Area 51), Linc
 
 ## Play online
 
-- Sim: https://5panners.github.io/a51/
-- Terrain viewer: https://5panners.github.io/a51/viewer/
+- Sim: https://5panners.github.io/A51/
+- Terrain viewer: https://5panners.github.io/A51/viewer/
 
 `.github/workflows/pages.yml` redeploys both on every push to `main` that touches `sim/` or `viewer/`. One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 
