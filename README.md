@@ -13,7 +13,10 @@ A browser helicopter sim over the real terrain around Groom Lake (Area 51), Linc
 - Sim: https://5panners.github.io/A51/
 - Terrain viewer: https://5panners.github.io/A51/viewer/
 
-`.github/workflows/pages.yml` redeploys both on every push to `main` that touches `sim/` or `viewer/`. One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+Either Pages source works:
+
+- **GitHub Actions** (recommended): `.github/workflows/pages.yml` publishes the sim at the site root and the viewer at `/viewer/` on every push to `main` that touches `sim/` or `viewer/`. Set **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+- **Deploy from a branch** (`main`, `/ (root)`): the repo is served as is (`.nojekyll` turns Jekyll off). The root `index.html` forwards to `/A51/sim/`.
 
 ## Run it locally
 
