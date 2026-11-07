@@ -1,0 +1,8 @@
+# downloaded elevation tiles (cache for tools/*.py)
+tiles/
+# smoke test output
+smoke-out/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
