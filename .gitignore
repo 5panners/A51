@@ -6,3 +6,5 @@ node_modules/
 __pycache__/
 *.pyc
 .DS_Store
+# CMU mocap downloads (cache for tools/build_mocap.py)
+mocap-cache/

@@ -1286,6 +1286,50 @@ J.Chest.add(AR.g);
 const flashMat = new THREE.SpriteMaterial({ map: dustTex, color: 0xffc070, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
 const flash = new THREE.Sprite(flashMat); flash.scale.setScalar(0.35); flash.visible = false; AR.muzzle.add(flash);
 
+// ---- motion capture: CMU locomotion cycles retargeted by tools/build_mocap.py (sim/mocap-clips.json)
+let MOCAP = null;
+const POSE = { hipsY: 0 }, _qI = new THREE.Quaternion(), _mq = new THREE.Quaternion(), _mq2 = new THREE.Quaternion();
+const TORSO_K = { Spine: 0.55, Chest: 0.45, Neck: 0.35, Head: 0.3 };   // the rifle damps the capture's torso swing
+function prepMocap(data) {
+  MOCAP = data;
+  for (const c of Object.values(data.clips)) {
+    c.Q = {}; for (const j of data.joints) c.Q[j] = c.q[j].map(a => new THREE.Quaternion(a[0], a[1], a[2], a[3]));
+    c.dist = Math.max(0.3, Math.hypot(c.travel[0], c.travel[1])); c.speed = c.dist / c.dur;
+  }
+  for (const j of data.joints) POSE[j] = new THREE.Quaternion();
+  const C = data.clips; MOCAP.fwd = ['creep', 'walk', 'jog', 'run'].map(n => C[n]).sort((a, b) => a.speed - b.speed);
+}
+// which clips, and how much of each, for this speed and direction
+function mocapBlend(hs, legYaw, back, turning) {
+  const out = { w: [], dist: 1, idle: 0 }, F = MOCAP.fwd, C = MOCAP.clips;
+  const s = turning ? 0.8 : hs;
+  // forward clips by speed (piecewise linear between their natural speeds)
+  if (s <= F[0].speed) out.w.push([F[0], 1]);
+  else if (s >= F[F.length - 1].speed) out.w.push([F[F.length - 1], 1]);
+  else for (let i = 0; i < F.length - 1; i++) if (s >= F[i].speed && s < F[i + 1].speed) { const u = (s - F[i].speed) / (F[i + 1].speed - F[i].speed); out.w.push([F[i], 1 - u], [F[i + 1], u]); }
+  // slow sideways movement: real sidesteps instead of a turned walk
+  const side = Math.abs(Math.sin(legYaw * (Math.PI / 2) / 1.25)) * (1 - sstep(s, 0.7, 1.3));
+  if (side > 0.01 && !turning) { for (const e of out.w) e[1] *= 1 - side; out.w.push([legYaw > 0 ? C.strafeR : C.strafeL, side]); out.side = side; }
+  out.dist = out.w.reduce((d, [c, w]) => d + c.dist * w, 0);
+  out.idle = turning ? 0 : 1 - sstep(hs, 0.12, 0.7);
+  return out;
+}
+function nlerpAdd(acc, q, w, first) { if (!first && acc.dot(q) < 0) w = -w; acc.x += q.x * w; acc.y += q.y * w; acc.z += q.z * w; acc.w += q.w * w; }
+function sampleQ(c, j, ph, out) { const n = c.Q[j].length, t = ph * n, i = Math.floor(t) % n, u = t - Math.floor(t); return out.copy(c.Q[j][i]).slerp(c.Q[j][(i + 1) % n], u); }
+function samplePose(blend, ph, idlePh) {
+  const idle = MOCAP.clips.idle;
+  for (const j of MOCAP.joints) {
+    const acc = POSE[j].set(0, 0, 0, 0); let first = true;
+    for (const [c, w] of blend.w) { if (w <= 0) continue; nlerpAdd(acc, sampleQ(c, j, ph, _mq), w, first); first = false; }
+    acc.normalize();
+    if (blend.idle > 0) acc.slerp(sampleQ(idle, j, idlePh, _mq2), blend.idle);
+  }
+  const hy = (c, p) => { const a = c.hipsY, n = a.length, t = p * n, i = Math.floor(t) % n, u = t - Math.floor(t); return a[i] + (a[(i + 1) % n] - a[i]) * u; };
+  const ar = (c, p) => { const a = c.air, n = a.length, t = p * n, i = Math.floor(t) % n, u = t - Math.floor(t); return a[i] + (a[(i + 1) % n] - a[i]) * u; };
+  let y = 0, air = 0; for (const [c, w] of blend.w) { y += hy(c, ph) * w; air += ar(c, ph) * w; }
+  POSE.hipsY = y * (1 - blend.idle) + hy(idle, idlePh) * blend.idle; POSE.air = air * (1 - blend.idle);
+}
+
 // ---- procedural animation: stance, gait, rifle handling, recoil, reload
 // The lower body (root yaw) lags the aim and swings toward the direction of travel; the spine and chest
 // twist back so the shoulders face the aim. The rifle is placed in world space from the shoulder pocket
@@ -1329,7 +1373,7 @@ const REC = { back: spring(260, 24), rise: spring(200, 18), yaw: spring(200, 20)
 function recoilKick() { REC.back.v += 1.5; REC.rise.v += 2.6 + Math.random() * 0.8; REC.yaw.v += (Math.random() - 0.5) * 1.6; }
 
 const RIFLE = { mag: 30, reserve: 210, auto: false, cool: 0, reload: 0, hits: 0, flashT: 0 };
-const ANIM = { bodyYaw: 0, phase: 0, idleT: 0, lagYaw: 0, lagPitch: 0, prevYaw: 0, prevPitch: 0, wasGround: true, step: 0, sprintK: 0, moveK: 0, reloadK: 0 };
+const ANIM = { bodyYaw: 0, ph01: 0, idlePh: 0, idleT: 0, lagYaw: 0, lagPitch: 0, prevYaw: 0, prevPitch: 0, wasGround: true, step: 0, sprintK: 0, moveK: 0, reloadK: 0 };
 const DROPPED = [];
 function dropMag() {
   const m = AR.mag.clone(); AR.g.updateMatrixWorld(true); AR.mag.matrixWorld.decompose(m.position, m.quaternion, m.scale);
@@ -1356,7 +1400,7 @@ const RELOAD_KEYS = [[0, 'r', 0.05, -0.02, 0.27], [0.32, 'r', 0.035, -0.1, 0.085
 const _rk0 = new THREE.Vector3(), _rk1 = new THREE.Vector3();
 function reloadHand(t, out) {
   let i = 0; while (i < RELOAD_KEYS.length - 2 && t > RELOAD_KEYS[i + 1][0]) i++;
-  const a = RELOAD_KEYS[i], b = RELOAD_KEYS[i + 1], u = sstep(a[0], b[0], t);
+  const a = RELOAD_KEYS[i], b = RELOAD_KEYS[i + 1], u = sstep(t, a[0], b[0]);
   const at = (k, v) => k[1] === 'r' ? AR.g.localToWorld(v.set(k[2], k[3], k[4])) : J.Chest.localToWorld(v.set(k[2], k[3], k[4]));
   return out.copy(at(a, _rk0)).lerp(at(b, _rk1), u);
 }
@@ -1383,46 +1427,57 @@ function animateSoldier(dt, sprint) {
   // ---- lower-body yaw: toward the direction of travel (backpedalling when moving backwards), bladed when standing
   let legYaw = 0, back = 1;
   if (hs > 0.4) { legYaw = Math.atan2(vs, Math.abs(vf) + 0.001); if (vf < -0.2) { back = -1; legYaw = -legYaw; } legYaw = clamp(legYaw, -1.25, 1.25); }
+  const sideK = Math.abs(Math.sin(legYaw * (Math.PI / 2) / 1.25)) * (1 - sstep(hs, 0.7, 1.3));   // sidestep clips at slow speed: hips stay square
+  const legTurn = legYaw * (1 - sideK);
   const blade = 0.42 * ready * (1 - clamp(A.moveK * 1.4, 0, 1)) + 0.12 * ready;   // right-handed: left shoulder toward the target
-  let target = sol.yaw - legYaw - blade;
+  let target = sol.yaw - legTurn - blade;
   const diff = wrapPi(target - A.bodyYaw);
   const turning = hs < 0.4 && Math.abs(wrapPi(sol.yaw - A.bodyYaw)) > 0.95;
   if (hs > 0.4 || turning || A.turnLeft > 0) { A.bodyYaw += diff * (1 - Math.exp(-(hs > 0.4 ? 9 : 7) * dt)); A.turnLeft = turning ? 0.35 : Math.max(0, (A.turnLeft || 0) - dt); }
   const twist = wrapPi(sol.yaw - A.bodyYaw);   // what the spine and chest must make up
 
-  // ---- gait: phase advances with distance travelled (no foot skating); a shuffle while turning on the spot
-  const stride = 1.3 + 0.9 * A.sprintK;
-  const prevPhase = A.phase;
-  if (hs > 0.25) A.phase += hs * dt / stride * Math.PI * 2;
-  else if (A.turnLeft > 0) A.phase += dt * 7;
-  else A.phase = damp(A.phase, Math.round(A.phase / Math.PI) * Math.PI, 6, dt);
-  if (Math.floor(prevPhase / Math.PI) !== Math.floor(A.phase / Math.PI) && sol.onGround && (hs > 0.6 || A.turnLeft > 0)) sfx('step', sol.pos);
-  const g = clamp(A.moveK, 0, 1.4), gTurn = A.turnLeft > 0 && hs < 0.4 ? 0.35 : 0, amp = Math.max(g, gTurn);
-  const ph = A.phase, sw = Math.sin(ph) * back;
-  const swingA = (0.4 + 0.12 * A.sprintK) * Math.min(amp, 1.05), knee = (0.72 + 0.3 * A.sprintK) * Math.min(amp, 1.1);
-  // stance: left foot forward, soft knees
-  const bend = 0.16 * ready + 0.08 * sol.aimK - dip * 0.9;
-  const tL = -0.1 * ready * (1 - amp) - swingA * sw, tR = 0.06 * ready * (1 - amp) + swingA * sw;
-  const kL = bend + knee * Math.max(0, Math.sin(ph * back - 1.25)) + 0.12 * amp, kR = bend + knee * Math.max(0, Math.sin(ph * back + Math.PI - 1.25)) + 0.12 * amp;
-  J0.ThighL.rotation.set(tL - bend * 0.55, 0, 0.03); J0.ThighR.rotation.set(tR - bend * 0.55, 0, -0.03);
-  J0.ShinL.rotation.set(kL, 0, 0); J0.ShinR.rotation.set(kR, 0, 0);
-  J0.FootL.rotation.set(-(tL - bend * 0.55) - kL + 0.22 * Math.cos(ph * back + 0.3) * amp, 0, 0);
-  J0.FootR.rotation.set(-(tR - bend * 0.55) - kR - 0.22 * Math.cos(ph * back + 0.3) * amp, 0, 0);
-  if (J0.ToeL) { J0.ToeL.rotation.x = Math.max(0, -0.45 * Math.sin(ph * back + 0.9)) * amp; J0.ToeR.rotation.x = Math.max(0, 0.45 * Math.sin(ph * back + 0.9)) * amp; }
-  // hips: lowered by the knee bend, bob twice a stride, roll and sway side to side; idle weight shift
+  // ---- gait from motion capture (CMU): forward clips blended by speed, played backwards when backpedalling,
+  // sidestep clips for slow strafing, an idle clip when standing; phase follows distance so the feet don't skate
+  const prevPhase = A.ph01;
+  const gTurn = A.turnLeft > 0 && hs < 0.4;
+  const blend = mocapBlend(hs, legYaw, back, gTurn);
+  if (hs > 0.25) A.ph01 = (A.ph01 + back * hs * dt / blend.dist + 1) % 1;
+  else if (gTurn) A.ph01 = (A.ph01 + dt * 1.1) % 1;
+  A.idlePh = (A.idlePh + dt / MOCAP.clips.idle.dur) % 1;
+  if (sol.onGround && (hs > 0.6 || gTurn) && Math.floor(prevPhase * 2) !== Math.floor(A.ph01 * 2)) sfx('step', sol.pos);
+  const amp = clamp(A.moveK, 0, 1.4), ph = A.ph01 * Math.PI * 2;
+  samplePose(blend, A.ph01, A.idlePh);
+  // combat stance on top of the capture: soft knees (more when aiming), dip on landing; slight lean in the sprint
+  const bend = 0.12 * ready * (1 - 0.5 * clamp(amp, 0, 1)) + 0.1 * sol.aimK - dip * 0.9;
+  for (const s of ['L', 'R']) {
+    J0['Thigh' + s].quaternion.copy(POSE['Thigh' + s]).multiply(offsetQ(-bend * 0.55 + (s === 'L' ? -0.07 : 0.05) * ready * blend.idle, 0, 0));
+    J0['Shin' + s].quaternion.copy(POSE['Shin' + s]).multiply(offsetQ(bend, 0, 0));
+    J0['Foot' + s].quaternion.copy(POSE['Foot' + s]).multiply(offsetQ(-bend * 0.45, 0, 0));
+    J0['Toe' + s].quaternion.copy(POSE['Toe' + s]);
+  }
   A.idleT += dt;
-  const breathe = Math.sin(A.idleT * 1.7), shift = Math.sin(A.idleT * 0.45) * (1 - clamp(amp, 0, 1));
-  J0.Hips.position.set(0.012 * shift + 0.02 * Math.sin(ph) * amp, HIP_Y - 0.045 * bend - 0.022 * amp * (0.5 - 0.5 * Math.cos(2 * ph)) + dip * 0.12, 0);
-  J0.Hips.rotation.set(0.04 * A.sprintK, 0.1 * Math.sin(ph) * amp, 0.045 * Math.sin(ph) * amp + 0.02 * shift);
+  const breathe = Math.sin(A.idleT * 1.7);
+  J0.Hips.position.set(0, HIP_Y + POSE.hipsY - 0.05 * bend + dip * 0.12, 0);
+  J0.Hips.quaternion.copy(POSE.Hips).multiply(offsetQ(0.04 * A.sprintK, 0, 0));
+  // ground the pelvis: put the lowest sole on the ground, plus the capture's own flight phase
+  SOL.root.position.copy(sol.pos); SOL.root.rotation.set(0, A.bodyYaw, 0); SOL.root.updateMatrixWorld(true);
+  let lowest = 1e9;
+  for (const s of ['L', 'R']) {
+    lowest = Math.min(lowest, J0['Foot' + s].localToWorld(_tmp.set(0, -0.09, -0.02)).y, J0['Toe' + s].localToWorld(_tmp.set(0, -0.035, 0.06)).y);
+  }
+  const lift = sol.pos.y + (sol.onGround ? POSE.air : 0.12) - lowest;
+  A.ground = A.ground === undefined ? lift : damp(A.ground, lift, 30, dt);
+  J0.Hips.position.y += A.ground;
 
   // ---- upper body: lean with speed, carry the pitch, twist back to the aim, breathe, absorb recoil
   const p = sol.pitch * (1 - A.sprintK * 0.7);
   const lean = 0.07 * ready + 0.12 * clamp(A.moveK, 0, 1) * ready + 0.2 * A.sprintK;
   const rb = REC.back.x * 2.2;
-  J0.Spine.rotation.set(lean * 0.6 - p * 0.35 - rb * 0.3, twist * 0.42, -0.03 * Math.sin(ph) * amp);
+  J0.Spine.rotation.set(lean * 0.6 - p * 0.35 - rb * 0.3, twist * 0.42, 0);
   J0.Chest.rotation.set(lean * 0.4 - p * 0.45 - rb * 0.7 + 0.008 * breathe, twist * 0.46, 0);
   J0.Neck.rotation.set(-p * 0.15 + 0.06 * sol.aimK, twist * 0.06, 0);
   J0.Head.rotation.set(-p * 0.05 + 0.08 * sol.aimK - lean * 0.5, 0.06 * twist - 0.1 * sol.aimK, 0.2 * sol.aimK);   // cheek onto the stock
+  for (const n in TORSO_K) { _mq.copy(_qI).slerp(POSE[n], TORSO_K[n] * (1 - 0.5 * sol.aimK)); J0[n].quaternion.premultiply(_mq); }
   SOL.root.position.copy(sol.pos); SOL.root.rotation.set(0, A.bodyYaw, 0);
   SOL.root.updateMatrixWorld(true);
 
@@ -1612,7 +1667,8 @@ function updateSoldier(dt) {
   const sprint = (K('ShiftLeft') || K('ShiftRight')) && fwd > 0 && !aiming;
   const fx = Math.sin(sol.yaw), fz = Math.cos(sol.yaw), rx = -fz, rz = fx;
   let wx = fx * fwd + rx * str, wz = fz * fwd + rz * str; const wl = Math.hypot(wx, wz); if (wl > 1) { wx /= wl; wz /= wl; }
-  const speed = sprint ? 6.8 : aiming ? 2.2 : 4.2, acc = sol.onGround ? 12 : 2;
+  let speed = sprint ? 4.6 : aiming ? 1.4 : 3.0; if (fwd < 0) speed = Math.min(speed, aiming ? 1.1 : 2.0);   // a tactical jog; backpedalling is slower
+  const acc = sol.onGround ? 10 : 2;
   sol.vel.x = damp(sol.vel.x, wx * speed, acc, dt); sol.vel.z = damp(sol.vel.z, wz * speed, acc, dt);
   if (sol.onGround && K('Space')) { sol.vel.y = 4.6; sol.onGround = false; }
   sol.vel.y -= 9.81 * dt;
@@ -1632,7 +1688,7 @@ function updateFootCamera(dt) {
   const p = sol.pitch, y = sol.yaw, k = sol.aimK;
   _icd.set(Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p));
   const dist = 3.1 - 1.75 * k, sh = 0.62 - 0.12 * k;
-  _icp.set(sol.pos.x, sol.pos.y + 1.6 - 0.12 * ANIM.sprintK + 0.012 * Math.sin(2 * ANIM.phase) * clamp(ANIM.moveK, 0, 1) * (1 - k), sol.pos.z).addScaledVector(_icd, -dist);
+  _icp.set(sol.pos.x, sol.pos.y + 1.6 - 0.12 * ANIM.sprintK + 0.012 * Math.sin(4 * Math.PI * ANIM.ph01) * clamp(ANIM.moveK, 0, 1) * (1 - k), sol.pos.z).addScaledVector(_icd, -dist);
   _icp.x += -Math.cos(y) * sh; _icp.z += Math.sin(y) * sh;
   const gh = physGround(_icp.x, _icp.z) + 0.3; if (_icp.y < gh) _icp.y = gh;
   camera.position.copy(_icp); camera.lookAt(_icp.x + _icd.x, _icp.y + _icd.y, _icp.z + _icd.z);
@@ -1764,12 +1820,13 @@ async function loadTerrain() {
 const tick = () => new Promise(r => setTimeout(r, 0));
 (async () => {
   try {
+    const mocapP = fetch('./mocap-clips.json').then(r => { if (!r.ok) throw new Error('mocap ' + r.status); return r.json(); });
     const modelP = loadModel(), featP = fetch('./groom-features.json').then(r => { if (!r.ok) throw new Error('airfield ' + r.status); return r.json(); });
     status('Loading terrain…'); await loadTerrain();
     status('Shading terrain…'); await tick();
     const { NM } = bakeMaps(); bar(0.75); await tick();
     buildPyramid(); initLabels();
-    status('Building the airfield…'); FEAT = await featP; buildAirfield(); buildRange(); Object.assign(window.littlebird, { setAim: v => { aiming = v; }, doors: DOORS, ground: physGround, sol, RIFLE, TARGETS, toggleBoard, camera, fire: () => { firing = true; } }); buildMini(NM); bar(0.85);
+    status('Building the airfield…'); prepMocap(await mocapP); FEAT = await featP; buildAirfield(); buildRange(); Object.assign(window.littlebird, { setAim: v => { aiming = v; }, ANIM, POSE, J, get MOCAP() { return MOCAP; }, doors: DOORS, ground: physGround, sol, RIFLE, TARGETS, toggleBoard, camera, fire: () => { firing = true; } }); buildMini(NM); bar(0.85);
     status('Loading Little Bird…');
     const gltf = await modelP;
     heli = gltf.scene; window.littlebird.heli = heli;
