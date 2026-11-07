@@ -74,6 +74,9 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 #stR{right:max(24px,env(safe-area-inset-right,0px));bottom:calc(24px + env(safe-area-inset-bottom,0px) + min(240px,34vmin) + 34px)}
 #tBtns{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));display:flex;gap:8px;pointer-events:auto}
 #tBtns button{background:var(--chip);padding:8px 12px}
+#footHud{left:max(16px,env(safe-area-inset-left,0px));top:calc(14px + env(safe-area-inset-top,0px));padding:8px 12px;font-weight:600;color:var(--phos);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+#footHud span{color:var(--muted);font-weight:400;font-size:12px}
+#act{left:50%;transform:translateX(-50%);bottom:calc(42% + env(safe-area-inset-bottom,0px));font:600 16px var(--f-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--amber);text-shadow:0 1px 3px #000}
 @media (max-width:640px){
   #card{top:auto;bottom:calc(16px + env(safe-area-inset-bottom,0px));max-height:55%;width:auto;right:max(16px,env(safe-area-inset-right,0px))}
   #adi{width:84px;height:84px}
@@ -103,6 +106,8 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 <div class="hud panel" id="miniW"><canvas id="mini" width="480" height="480" aria-label="Map around the helicopter; click to zoom"></canvas><div id="miniT">37.26° N 115.80° W</div></div>
 <div class="hud panel" id="fps" hidden></div>
 <div id="labels"></div>
+<div class="hud panel" id="footHud" hidden></div>
+<div class="hud" id="act" hidden></div>
 
 <div id="center"><div class="panel" id="prompt"><div id="load">Loading terrain…<div id="loadBar"><i></i></div></div></div></div>
 
@@ -146,7 +151,12 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
   </div>
   <button id="toggleKeys" aria-expanded="true">Hide controls</button>
   <div class="keys" id="keys">
-    <kbd>Click</kbd><span>Grab the mouse to fly (Esc releases)</span>
+    <kbd>Click</kbd><span>Grab the mouse to play (Esc releases)</span>
+    <kbd>On foot</kbd><span>WASD move · Shift sprint · Space jump · mouse look</span>
+    <kbd>LMB · RMB</kbd><span>Fire the AR-15 · aim down the sights</span>
+    <kbd>R · B</kbd><span>Reload · semi / auto</span>
+    <kbd>F</kbd><span>Get in or out of the Little Bird</span>
+    <kbd>Flying</kbd><span>the keys below</span>
     <kbd>E</kbd><span>Start / stop engine (4 s spool)</span>
     <kbd>W / S</kbd><span>Collective up / down, release to hover</span>
     <kbd>Mouse</kbd><span>Pitch and roll (push forward = nose down)</span>
@@ -154,7 +164,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
     <kbd>Arrows</kbd><span>Look around</span>
     <kbd>Wheel · V</kbd><span>Zoom · recentre camera</span>
     <kbd>C · O</kbd><span>Cockpit · inspect camera</span>
-    <kbd>R</kbd><span>Reset to the start</span>
+    <kbd>R</kbd><span>Reset to the start (in the helicopter)</span>
     <kbd>T</kbd><span>Day / dusk / night</span>
     <kbd>H</kbd><span>Hide this panel</span>
     <kbd>Z · Shift+Z</kbd><span>Zoom the map in / out (or click or scroll it)</span>
@@ -167,7 +177,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 <div id="touch" hidden>
   <div class="stick" id="stL"><b>COLLECTIVE · YAW</b><i></i></div>
   <div class="stick" id="stR"><b>CYCLIC</b><i></i></div>
-  <div id="tBtns"><button id="tEng">Engine</button><button id="tCam">Camera</button><button id="tReset">Reset</button><button id="tMenu">Menu</button></div>
+  <div id="tBtns"><button id="tFire" hidden>Fire</button><button id="tAim" hidden>Aim</button><button id="tReload" hidden>Reload</button><button id="tBoard">Board</button><button id="tEng">Engine</button><button id="tCam">Camera</button><button id="tReset">Reset</button><button id="tMenu">Menu</button></div>
 </div>
 
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
@@ -178,6 +188,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { HeliFlightModel, HeliInput, LITTLEBIRD_TUNING } from './littlebird-flight.js';
+import { buildSoldier, applyPose } from './soldier.js';
 
 const $ = id => document.getElementById(id);
 const clamp = THREE.MathUtils.clamp, sstep = THREE.MathUtils.smoothstep;
@@ -227,7 +238,7 @@ const U = {
   sunDir: { value: sunDir }, camPos: { value: new THREE.Vector3() },
   uHalf: { value: HALF }, uCell: { value: CELL }, uGN: { value: GN }, uS: { value: S },
   hMap: { value: null }, nMap: { value: null }, sMap: { value: null },
-  shC: { value: new THREE.Vector3(0, -1e5, 0) }, shK: { value: 0 },
+  shC: { value: new THREE.Vector3(0, -1e5, 0) }, shK: { value: 0 }, shC2: { value: new THREE.Vector3(0, -1e5, 0) }, shK2: { value: 0 },
   uSunC: { value: new THREE.Vector3() }, uAmbC: { value: new THREE.Vector3() }, uSkyK: { value: new THREE.Vector3(1, 1, 1) },
   uSunGlow: { value: 1 }, uNight: { value: 0 }, uLampK: { value: 0 }, uLightK: { value: 0.18 }, uTime: { value: 0 },
   uLamps: { value: Array.from({ length: NLAMP }, () => new THREE.Vector4(0, -1e5, 0, 0)) },
@@ -324,7 +335,7 @@ const terrainMat = new THREE.ShaderMaterial({
       #include <logdepthbuf_vertex>
     }`,
   fragmentShader: /* glsl */`
-    uniform sampler2D nMap, sMap; uniform vec3 sunDir, camPos, shC; uniform float shK, uHalf, uCell, uGN, uS;
+    uniform sampler2D nMap, sMap; uniform vec3 sunDir, camPos, shC, shC2; uniform float shK, shK2, uHalf, uCell, uGN, uS;
     varying vec3 vW;
     #include <logdepthbuf_pars_fragment>
     ${SKY_GLSL}
@@ -371,7 +382,7 @@ const terrainMat = new THREE.ShaderMaterial({
       col *= 0.92 + 0.16 * mix(0.5, n4, nearHF);
       // light
       float ndl = max(dot(n, sunDir), 0.0);
-      float hs = 1.0 - shK * (1.0 - smoothstep(1.8, 5.2, length(vW.xz - shC.xz)));
+      float hs = (1.0 - shK * (1.0 - smoothstep(1.8, 5.2, length(vW.xz - shC.xz)))) * (1.0 - shK2 * (1.0 - smoothstep(0.22, 0.7, length(vW.xz - shC2.xz))));
       vec3 L = uSunC * ndl * tsh * hs + uAmbC * (0.62 + 0.38 * n.y) + uAmbC * vec3(1.0, 0.8, 0.6) * 0.19 * (1.0 - n.y) + lamps(vW);
       col *= L;
       // aerial perspective: denser haze low in the valleys
@@ -549,7 +560,7 @@ const paveMat = new THREE.ShaderMaterial({
       #include <logdepthbuf_vertex>
     }`,
   fragmentShader: /* glsl */`
-    uniform sampler2D nMap, sMap, digits; uniform vec3 sunDir, camPos, shC; uniform float shK, uHalf, uCell, uGN, uS;
+    uniform sampler2D nMap, sMap, digits; uniform vec3 sunDir, camPos, shC, shC2; uniform float shK, shK2, uHalf, uCell, uGN, uS;
     varying vec3 vW; varying vec4 vP;
     #include <logdepthbuf_pars_fragment>
     ${SKY_GLSL}
@@ -596,7 +607,7 @@ const paveMat = new THREE.ShaderMaterial({
       paint *= 1.0 - 0.5 * aa;              // markings fade into the surface far away instead of shimmering
       col = mix(col, paintC * (0.95 + 0.05 * nf), paint);
       float ndl = max(dot(n, sunDir), 0.0);
-      float hs = 1.0 - shK * (1.0 - smoothstep(1.8, 5.2, length(vW.xz - shC.xz)));
+      float hs = (1.0 - shK * (1.0 - smoothstep(1.8, 5.2, length(vW.xz - shC.xz)))) * (1.0 - shK2 * (1.0 - smoothstep(0.22, 0.7, length(vW.xz - shC2.xz))));
       vec3 Lc = uSunC * ndl * tsh * hs + uAmbC * (0.62 + 0.38 * n.y) + lamps(vW);
       col *= Lc;
       vec3 vd = normalize(vW - camPos);
@@ -1047,6 +1058,7 @@ function resetHeli() {
   fm.reset(new THREE.Vector3(s.x, y, s.z), fmHeading(s.hdg), s.air);
   if (s.air) { const f = new THREE.Vector3(0, 0, 1).applyQuaternion(fm.quaternion); fm.velocity.copy(f.multiplyScalar(25)); fm.collective = 0; fm.grounded = false; fm._contact = false; }
   crashMsg = ''; camInit = true;
+  placeSoldierForSpawn(s.air);
 }
 function loadModel() {
   return fetch('./littlebird.glb.b64.txt').then(r => { if (!r.ok) throw new Error('model ' + r.status); return r.text(); })
@@ -1158,6 +1170,7 @@ const isTouch = matchMedia('(pointer: coarse)').matches;
 function showPrompt() {
   const p = $('prompt'); if (!ready) return;
   const locked = document.pointerLockElement === canvas;
+  if (mode === 'foot') { p.parentElement.hidden = locked || isTouch; p.innerHTML = 'Click to play<span>Mouse to look, WASD to move, left button to fire. Esc releases the mouse.</span>'; return; }
   if (camMode === 'orbit') { p.parentElement.hidden = true; return; }
   const parked = fm.telemetry && !fm.engineOn && fm.rpm < 0.05 && !fm.crashed;
   if (locked || isTouch) { p.parentElement.hidden = !parked; p.innerHTML = (isTouch ? 'Tap Engine to start' : 'Press E to start the engine') + '<span>' + (isTouch ? 'Push the left stick up' : 'Hold W') + ' to lift off once the rotor reaches 100%</span>'; return; }
@@ -1182,6 +1195,11 @@ if (isTouch) {
   bindStick($('stL'), (x, y) => { touchIn.collective = -y; touchIn.yaw = x; });
   bindStick($('stR'), (x, y) => { touchIn.roll = x; touchIn.pitch = -y; });
   $('tEng').onclick = () => { fm.toggleEngine(); startAudio(); showPrompt(); };
+  $('tFire').addEventListener('pointerdown', e => { e.preventDefault(); firing = true; startAudio(); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) $('tFire').addEventListener(ev, () => { firing = false; });
+  $('tAim').onclick = () => { aiming = !aiming; $('tAim').setAttribute('aria-pressed', aiming); };
+  $('tReload').onclick = () => reload();
+  $('tBoard').onclick = () => { toggleBoard(); startAudio(); };
   $('tCam').onclick = () => setCam(camMode === 'chase' ? 'cockpit' : 'chase');
   $('tReset').onclick = () => { resetHeli(); showPrompt(); };
   $('tMenu').onclick = () => { $('card').hidden = !$('card').hidden; };
@@ -1215,16 +1233,366 @@ function updateAudio() {
   audio.lp.frequency.setTargetAtTime(220 + r * 260, now, 0.1);
   audio.whine.frequency.setTargetAtTime(300 + r * 900, now, 0.2);
   audio.wg.gain.setTargetAtTime(fm.engineOn ? 0.02 + r * 0.025 : 0, now, 0.3);
-  audio.master.gain.setTargetAtTime(muted ? 0 : 0.5, now, 0.05);
+  const away = mode === 'foot' ? Math.min(1, 14 / Math.max(1, sol.pos.distanceTo(fm.position))) : 1;
+  audio.master.gain.setTargetAtTime(muted ? 0 : 0.5 * away, now, 0.05);
+}
+
+/* ================= soldier on foot: AR-15, third-person camera, boarding the Little Bird ================= */
+// The soldier is the US Soldier Model (sim/soldier.js), low-poly game LOD. He faces +Z; his left is +X.
+const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
+const SOL = buildSoldier({ lod: 'low' });
+applyPose(SOL, 'stand');
+SOL.root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+scene.add(SOL.root);
+const J = SOL.joints, HIP_Y = SOL._restY;
+const sol = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0, onGround: true, aimK: 0, lowK: 0, walkT: 0, kick: 0, seated: false };
+let mode = 'foot';   // 'foot' or 'heli'
+let firing = false, aiming = false;
+
+// ---- the AR-15: +Z is the muzzle, origin at the top of the pistol grip, bore line at y = 0.05
+function buildAR15() {
+  const g = new THREE.Group(); g.name = 'AR15';
+  const blk = new THREE.MeshStandardMaterial({ color: 0x1d1e1f, roughness: 0.5, metalness: 0.4, flatShading: true });
+  const poly = new THREE.MeshStandardMaterial({ color: 0x272725, roughness: 0.85, flatShading: true });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x3b3c3e, roughness: 0.35, metalness: 0.85, flatShading: true });
+  const box = (w, h, d, x, y, z, m = blk, rx = 0) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); o.rotation.x = rx; g.add(o); return o; };
+  const rod = (r0, r1, l, x, y, z, m = steel, seg = 10) => { const o = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, l, seg), m); o.rotation.x = Math.PI / 2; o.position.set(x, y, z); g.add(o); return o; };
+  box(0.032, 0.05, 0.2, 0, 0.012, 0.03);                 // lower receiver
+  box(0.03, 0.046, 0.24, 0, 0.056, 0.06);                // upper receiver
+  box(0.006, 0.02, 0.05, 0.017, 0.058, 0.03, steel);     // ejection port cover
+  box(0.022, 0.012, 0.44, 0, 0.084, 0.18, steel);        // top rail
+  for (let i = 0; i < 15; i++) box(0.025, 0.004, 0.006, 0, 0.092, -0.03 + i * 0.03, steel);
+  box(0.046, 0.05, 0.3, 0, 0.052, 0.34, poly);           // M-LOK handguard
+  for (let i = 0; i < 4; i++) box(0.048, 0.012, 0.035, 0, 0.045, 0.24 + i * 0.065, blk);
+  rod(0.0075, 0.0075, 0.2, 0, 0.052, 0.59);              // barrel
+  rod(0.011, 0.011, 0.055, 0, 0.052, 0.715, blk);        // flash hider
+  box(0.012, 0.03, 0.02, 0, 0.112, 0.46, blk);           // folding front sight
+  box(0.03, 0.09, 0.06, 0, -0.045, -0.018, poly, -0.32); // pistol grip
+  box(0.024, 0.022, 0.075, 0, -0.004, 0.09, blk);        // magazine well
+  box(0.027, 0.15, 0.07, 0, -0.075, 0.1, blk, 0.2);      // 30-round magazine
+  box(0.006, 0.006, 0.05, 0, -0.022, 0.028, steel);      // trigger guard
+  rod(0.014, 0.014, 0.2, 0, 0.046, -0.16, blk);          // buffer tube
+  box(0.04, 0.07, 0.11, 0, 0.034, -0.25, poly);          // collapsible stock
+  box(0.042, 0.12, 0.022, 0, 0.018, -0.31, poly);        // butt pad
+  box(0.03, 0.036, 0.065, 0, 0.116, 0.06, blk);          // red-dot sight
+  box(0.022, 0.022, 0.002, 0, 0.12, 0.094, new THREE.MeshBasicMaterial({ color: 0x3a5060 }));
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0.052, 0.75); g.add(muzzle);
+  return { g, muzzle, grip: new THREE.Vector3(0, -0.02, -0.03), fore: new THREE.Vector3(0, 0.03, 0.33) };
+}
+const AR = buildAR15();
+J.Chest.add(AR.g);
+// muzzle flash: a small additive sprite at the muzzle
+const flashMat = new THREE.SpriteMaterial({ map: dustTex, color: 0xffc070, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+const flash = new THREE.Sprite(flashMat); flash.scale.setScalar(0.35); flash.visible = false; AR.muzzle.add(flash);
+
+// ---- arms: two-bone IK so the hands stay on the grip and the handguard whatever the pose
+const _iS = new THREE.Vector3(), _iE = new THREE.Vector3(), _iT = new THREE.Vector3(), _iP = new THREE.Vector3(), _id = new THREE.Vector3(), _iq = new THREE.Quaternion(), DOWN = new THREE.Vector3(0, -1, 0);
+const L_UP = 0.29, L_FORE = 0.265;
+function boneDir(bone, dirW) {
+  bone.parent.getWorldQuaternion(_iq).invert();
+  bone.quaternion.setFromUnitVectors(DOWN, _id.copy(dirW).applyQuaternion(_iq).normalize());
+  bone.updateMatrixWorld(true);
+}
+function armIK(side, targetW, poleW) {
+  const up = J['UpperArm' + side], fore = J['Forearm' + side];
+  up.getWorldPosition(_iS);
+  const toT = _iT.copy(targetW).sub(_iS), dist = clamp(toT.length(), 0.05, L_UP + L_FORE - 0.002); toT.normalize();
+  const a = (L_UP * L_UP - L_FORE * L_FORE + dist * dist) / (2 * dist), h = Math.sqrt(Math.max(0, L_UP * L_UP - a * a));
+  const pole = _iP.copy(poleW).sub(_iS); pole.addScaledVector(toT, -pole.dot(toT)).normalize();
+  _iE.copy(_iS).addScaledVector(toT, a).addScaledVector(pole, h);
+  boneDir(up, _id.copy(_iE).sub(_iS));
+  boneDir(fore, _id.copy(targetW).sub(_iE));
+}
+const _ig = new THREE.Vector3(), _if = new THREE.Vector3(), _ipl = new THREE.Vector3();
+function poseArms() {
+  SOL.root.updateMatrixWorld(true);
+  AR.g.localToWorld(_ig.copy(AR.grip)); AR.g.localToWorld(_if.copy(AR.fore));
+  armIK('R', _ig, SOL.root.localToWorld(_ipl.set(-0.7, 0.9, -0.2)));
+  armIK('L', _if, SOL.root.localToWorld(_ipl.set(0.6, 0.7, 0.3)));
+}
+
+// ---- rifle state, aim and recoil
+const RIFLE = { mag: 30, reserve: 210, auto: false, cool: 0, reload: 0, hits: 0, flashT: 0 };
+function placeRifle(dt) {
+  sol.kick = Math.max(0, sol.kick - dt * 9);
+  // shouldered (aim) vs. low ready (sprinting); the chest carries the rifle, the spine and chest carry the pitch
+  const k = sol.lowK;
+  AR.g.position.set(-0.115 + 0.03 * k, 0.29 - 0.11 * k, 0.43 - 0.08 * k - sol.kick * 0.03);
+  AR.g.rotation.set(0.55 * k - sol.kick * 0.05, 0.18 * k, 0);
+  AR.g.visible = !sol.seated;
+}
+
+// ---- steel target range east of the runway 32 threshold
+const TARGETS = [];
+function buildRange() {
+  if (!MAIN_RWY) return;
+  const p = MAIN_RWY.pts, [x1, z1] = p[p.length - 1], [x0, z0] = p[p.length - 2], l = Math.hypot(x1 - x0, z1 - z0);
+  const tx = (x0 - x1) / l, tz = (z0 - z1) / l;          // along the runway, toward the north-west
+  const rx = -tz, rz = tx;                                // across it (east side when facing up the runway)
+  const sx = x1 + tx * 28 + rx * 34, sz = z1 + tz * 28 + rz * 34;   // where the soldier starts, beside the parked heli
+  RANGE.x = sx; RANGE.z = sz; RANGE.yaw = Math.atan2(rx, rz);
+  const steel = new THREE.MeshStandardMaterial({ color: 0xd9d3c3, roughness: 0.6, metalness: 0.3, flatShading: true });
+  const post = new THREE.MeshStandardMaterial({ color: 0x4a4740, roughness: 0.8 });
+  [25, 40, 55, 75, 100, 130, 170, 220].forEach((d, i) => {
+    const off = (i % 2 ? 1 : -1) * (4 + i * 2.2), x = sx + rx * d + tx * off, z = sz + rz * d + tz * off, y = groundHeight(x, z);
+    const grp = new THREE.Group(); grp.position.set(x, y, z); grp.rotation.y = Math.atan2(sx - x, sz - z);
+    const hinge = new THREE.Group(); hinge.position.y = 0.55; grp.add(hinge);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.75, 0.02), steel); plate.position.y = 0.375; hinge.add(plate);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.02), steel); head.position.y = 0.86; hinge.add(head);
+    const stand = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.55, 0.06), post); stand.position.y = 0.275; grp.add(stand);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.06, 0.35), post); base.position.y = 0.03; grp.add(base);
+    grp.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    scene.add(grp); markCell(x, z);
+    TARGETS.push({ grp, hinge, down: 0, t: 0, d });
+  });
+}
+const RANGE = { x: 0, z: 0, yaw: 0 };
+const _ibox = new THREE.Box3(), _iray = new THREE.Ray(), _ihitP = new THREE.Vector3();
+function targetHit(origin, dir) {
+  let best = null, bt = 1e9;
+  for (const T of TARGETS) {
+    if (T.down) continue;
+    _ibox.setFromObject(T.hinge); _iray.set(origin, dir);
+    if (_iray.intersectBox(_ibox, _ihitP)) { const t = _ihitP.distanceTo(origin); if (t < bt) { bt = t; best = T; } }
+  }
+  return best ? { t: bt, T: best } : null;
+}
+
+// ---- hitscan: march the ray through terrain and buildings, test targets exactly
+const _io = new THREE.Vector3(), _idir = new THREE.Vector3(), _iq2 = new THREE.Vector3();
+function castShot(origin, dir) {
+  const tgt = targetHit(origin, dir);
+  let t = 0, prev = 0;
+  while (t < 900) {
+    const step = t < 40 ? 0.5 : t < 200 ? 1.5 : 4;
+    t += step; _iq2.copy(origin).addScaledVector(dir, t);
+    if (tgt && t > tgt.t) break;
+    const g = groundHeight(_iq2.x, _iq2.z);
+    if (_iq2.y < g) {   // refine the terrain hit
+      let a = prev, b = t; for (let i = 0; i < 8; i++) { const m = (a + b) / 2; _iq2.copy(origin).addScaledVector(dir, m); if (_iq2.y < groundHeight(_iq2.x, _iq2.z)) b = m; else a = m; }
+      _iq2.copy(origin).addScaledVector(dir, b);
+      const paved = paveMask.has(Math.floor(_iq2.x / PAVE_CELL) + ',' + Math.floor(_iq2.z / PAVE_CELL));
+      return { p: _iq2.clone(), kind: paved ? 'concrete' : 'dust' };
+    }
+    const bl = buildingAt(_iq2.x, _iq2.z);
+    if (bl && _iq2.y < bl.top) return { p: _iq2.clone(), kind: 'concrete' };
+    prev = t;
+  }
+  if (tgt) { tgt.T.down = 1; tgt.T.t = 0; RIFLE.hits++; return { p: _io.copy(origin).addScaledVector(dir, tgt.t).clone(), kind: 'steel', T: tgt.T }; }
+  return null;
+}
+
+// impact puffs and tracers
+const IMP = 160, imp = { pos: new Float32Array(IMP * 3), col: new Float32Array(IMP * 3), vel: new Float32Array(IMP * 3), life: new Float32Array(IMP), next: 0 };
+const impGeo = new THREE.BufferGeometry();
+impGeo.setAttribute('position', new THREE.BufferAttribute(imp.pos, 3)); impGeo.setAttribute('color', new THREE.BufferAttribute(imp.col, 3));
+const impPts = new THREE.Points(impGeo, new THREE.PointsMaterial({ size: 0.5, map: dustTex, vertexColors: true, transparent: true, opacity: 0.8, depthWrite: false }));
+impPts.frustumCulled = false; scene.add(impPts);
+for (let i = 0; i < IMP; i++) imp.pos[i * 3 + 1] = -1e5;
+function puff(p, kind) {
+  const c = kind === 'steel' ? [1.0, 0.8, 0.4] : kind === 'concrete' ? [0.75, 0.74, 0.7] : [0.78, 0.68, 0.52];
+  for (let k = 0; k < (kind === 'steel' ? 6 : 9); k++) {
+    const i = imp.next = (imp.next + 1) % IMP;
+    imp.pos.set([p.x, p.y + 0.05, p.z], i * 3); imp.col.set(c, i * 3);
+    imp.vel.set([(Math.random() - 0.5) * 2.5, 1 + Math.random() * 2.5, (Math.random() - 0.5) * 2.5], i * 3); imp.life[i] = 0.5 + Math.random() * 0.6;
+  }
+}
+function updateImpacts(dt) {
+  for (let i = 0; i < IMP; i++) {
+    if (imp.life[i] <= 0) { imp.pos[i * 3 + 1] = -1e5; continue; }
+    imp.life[i] -= dt; const o = i * 3; imp.vel[o + 1] -= 4 * dt;
+    imp.pos[o] += imp.vel[o] * dt; imp.pos[o + 1] += imp.vel[o + 1] * dt; imp.pos[o + 2] += imp.vel[o + 2] * dt;
+  }
+  impGeo.attributes.position.needsUpdate = true; impGeo.attributes.color.needsUpdate = true;
+}
+const tracerGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+const tracer = new THREE.Line(tracerGeo, new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+tracer.frustumCulled = false; tracer.visible = false; scene.add(tracer); let tracerT = 0;
+const _imw = new THREE.Vector3();
+function fireRound() {
+  RIFLE.mag--; RIFLE.cool = 60 / 750;
+  camera.getWorldDirection(_idir);
+  const spread = (sol.aimK > 0.5 ? 0.0015 : 0.008) + Math.min(0.02, Math.hypot(sol.vel.x, sol.vel.z) * 0.003);
+  _idir.x += (Math.random() - 0.5) * spread; _idir.y += (Math.random() - 0.5) * spread; _idir.z += (Math.random() - 0.5) * spread; _idir.normalize();
+  const hit = castShot(camera.position, _idir);
+  AR.muzzle.getWorldPosition(_imw);
+  const end = hit ? hit.p : _io.copy(camera.position).addScaledVector(_idir, 600);
+  tracerGeo.attributes.position.setXYZ(0, _imw.x, _imw.y, _imw.z); tracerGeo.attributes.position.setXYZ(1, end.x, end.y, end.z); tracerGeo.attributes.position.needsUpdate = true;
+  tracer.visible = true; tracerT = 0.05;
+  if (hit) { puff(hit.p, hit.kind); if (hit.kind === 'steel') sfx('ding', hit.p); }
+  RIFLE.flashT = 0.045; flash.material.rotation = Math.random() * 6.28; flash.scale.setScalar(0.28 + Math.random() * 0.15);
+  sol.pitch = Math.min(1.3, sol.pitch + 0.011 + Math.random() * 0.006); sol.yaw += (Math.random() - 0.5) * 0.007; sol.kick = 1;
+  sfx('shot');
+}
+function updateRifle(dt) {
+  RIFLE.cool -= dt; RIFLE.flashT -= dt; tracerT -= dt;
+  flash.visible = RIFLE.flashT > 0; tracer.visible = tracerT > 0;
+  if (RIFLE.reload > 0) { RIFLE.reload -= dt; if (RIFLE.reload <= 0) { const n = Math.min(30 - RIFLE.mag, RIFLE.reserve); RIFLE.mag += n; RIFLE.reserve -= n; } }
+  if (mode === 'foot' && firing && RIFLE.cool <= 0 && RIFLE.reload <= 0 && sol.lowK < 0.3) {
+    if (RIFLE.mag > 0) { fireRound(); if (!RIFLE.auto) firing = false; }
+    else { sfx('click'); firing = false; }
+  }
+  for (const T of TARGETS) {
+    if (!T.down) { T.hinge.rotation.x = damp(T.hinge.rotation.x, 0, 8, dt); continue; }
+    T.t += dt; T.hinge.rotation.x = damp(T.hinge.rotation.x, -1.45, 14, dt);
+    if (T.t > 4) T.down = 0;
+  }
+}
+function reload() { if (RIFLE.reload > 0 || RIFLE.mag >= 30 || RIFLE.reserve <= 0) return; RIFLE.reload = 2.3; sfx('reload'); }
+
+// ---- movement
+document.addEventListener('mousemove', e => {
+  if (mode !== 'foot' || document.pointerLockElement !== canvas) return;
+  const k = 0.0022 * (sol.aimK > 0.5 ? 0.55 : 1);
+  sol.yaw -= e.movementX * k; sol.pitch = clamp(sol.pitch - e.movementY * k, -1.2, 1.3);
+});
+canvas.addEventListener('mousedown', e => {
+  if (mode !== 'foot' || document.pointerLockElement !== canvas) return;
+  if (e.button === 0) firing = true; if (e.button === 2) aiming = true;
+});
+addEventListener('mouseup', e => { if (e.button === 0) firing = false; if (e.button === 2) aiming = false; });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+function updateSoldier(dt) {
+  const K = c => input.keys.has(c) ? 1 : 0;
+  let fwd = K('KeyW') - K('KeyS'), str = K('KeyD') - K('KeyA');
+  if (isTouch) { fwd += touchIn.collective; str += touchIn.yaw; sol.yaw -= touchIn.roll * 2.2 * dt; sol.pitch = clamp(sol.pitch + touchIn.pitch * 1.4 * dt, -1.2, 1.3); }
+  const sprint = (K('ShiftLeft') || K('ShiftRight')) && fwd > 0 && !aiming;
+  const fx = Math.sin(sol.yaw), fz = Math.cos(sol.yaw), rx = -fz, rz = fx;
+  let wx = fx * fwd + rx * str, wz = fz * fwd + rz * str; const wl = Math.hypot(wx, wz); if (wl > 1) { wx /= wl; wz /= wl; }
+  const speed = sprint ? 6.8 : aiming ? 2.2 : 4.2, acc = sol.onGround ? 12 : 2;
+  sol.vel.x = damp(sol.vel.x, wx * speed, acc, dt); sol.vel.z = damp(sol.vel.z, wz * speed, acc, dt);
+  if (sol.onGround && K('Space')) { sol.vel.y = 4.6; sol.onGround = false; }
+  sol.vel.y -= 9.81 * dt;
+  // walls block, roofs carry (step onto anything within 0.45 m)
+  const blocked = (x, z) => { const b = buildingAt(x, z); return b && sol.pos.y < b.top - 0.45; };
+  let nx = sol.pos.x + sol.vel.x * dt, nz = sol.pos.z + sol.vel.z * dt;
+  if (blocked(nx, nz)) { if (!blocked(nx, sol.pos.z)) { nz = sol.pos.z; sol.vel.z = 0; } else if (!blocked(sol.pos.x, nz)) { nx = sol.pos.x; sol.vel.x = 0; } else { nx = sol.pos.x; nz = sol.pos.z; sol.vel.x = sol.vel.z = 0; } }
+  sol.pos.x = clamp(nx, -HALF + 200, HALF - 200); sol.pos.z = clamp(nz, -HALF + 200, HALF - 200); sol.pos.y += sol.vel.y * dt;
+  const gnd = physGround(sol.pos.x, sol.pos.z);
+  if (sol.pos.y <= gnd + 0.02) { sol.pos.y = gnd; if (sol.vel.y < 0) sol.vel.y = 0; sol.onGround = true; } else if (sol.pos.y > gnd + 0.3) sol.onGround = false;
+  // aim, low ready, body pose
+  sol.aimK = damp(sol.aimK, aiming ? 1 : 0, 12, dt); sol.lowK = damp(sol.lowK, sprint ? 1 : 0, 8, dt);
+  const hs = Math.hypot(sol.vel.x, sol.vel.z);
+  sol.walkT += dt * (2.2 + hs * 1.25) * (hs > 0.2 ? 1 : 0);
+  const a = Math.min(1, hs / 4.2), s = Math.sin(sol.walkT), c = Math.cos(sol.walkT);
+  const back = (sol.vel.x * fx + sol.vel.z * fz) < -0.3 ? -1 : 1;
+  J.ThighL.rotation.set(-0.45 * s * a * back, 0, 0); J.ThighR.rotation.set(0.45 * s * a * back, 0, 0);
+  J.ShinL.rotation.set((0.15 + 0.55 * Math.max(0, Math.sin(sol.walkT - 1.4))) * a, 0, 0); J.ShinR.rotation.set((0.15 + 0.55 * Math.max(0, Math.sin(sol.walkT + Math.PI - 1.4))) * a, 0, 0);
+  J.FootL.rotation.x = 0.18 * Math.cos(sol.walkT + 0.3) * a; J.FootR.rotation.x = -0.18 * Math.cos(sol.walkT + 0.3) * a;
+  J.Hips.position.y = HIP_Y - 0.015 * Math.abs(c) * a - (sol.onGround ? 0 : 0.05);
+  J.Hips.rotation.set(0, -0.08 * s * a, 0);
+  const p = sol.pitch * (1 - sol.lowK * 0.6);
+  J.Spine.rotation.set(-p * 0.35 + 0.06 * sol.lowK, 0.25 * (1 - sol.lowK) + 0.06 * s * a, 0);
+  J.Chest.rotation.set(-p * 0.65, -0.18 * (1 - sol.lowK), 0);   // turn the shoulders into the rifle
+  J.Neck.rotation.set(0, -0.05, 0); J.Head.rotation.set(0.05 * sol.aimK, -0.06 - 0.12 * sol.aimK, 0);
+  SOL.root.position.copy(sol.pos); SOL.root.rotation.set(0, sol.yaw, 0);
+  placeRifle(dt); poseArms();
+}
+
+// ---- third-person camera over the right shoulder; aiming pulls it in and narrows the view
+const _icp = new THREE.Vector3(), _icd = new THREE.Vector3();
+function updateFootCamera(dt) {
+  const p = sol.pitch, y = sol.yaw, k = sol.aimK;
+  _icd.set(Math.sin(y) * Math.cos(p), Math.sin(p), Math.cos(y) * Math.cos(p));
+  const dist = 3.1 - 1.75 * k, sh = 0.62 - 0.12 * k;
+  _icp.set(sol.pos.x, sol.pos.y + 1.62 - 0.1 * sol.lowK, sol.pos.z).addScaledVector(_icd, -dist);
+  _icp.x += -Math.cos(y) * sh; _icp.z += Math.sin(y) * sh;
+  const gh = physGround(_icp.x, _icp.z) + 0.3; if (_icp.y < gh) _icp.y = gh;
+  camera.position.copy(_icp); camera.lookAt(_icp.x + _icd.x, _icp.y + _icd.y, _icp.z + _icd.z);
+  const fov = 62 - 20 * k; if (Math.abs(camera.fov - fov) > 0.05) { camera.fov = fov; camera.updateProjectionMatrix(); }
+}
+
+// ---- boarding and leaving the helicopter
+const SEATED = { ThighL: [-1.42, 0.08, 0], ThighR: [-1.42, -0.08, 0], ShinL: [1.35, 0, 0], ShinR: [1.35, 0, 0], FootL: [0.1, 0, 0], FootR: [0.1, 0, 0],
+  UpperArmL: [-0.55, 0, 0.18], UpperArmR: [-0.7, 0, -0.12], ForearmL: [-0.8, 0, 0], ForearmR: [-0.95, 0, 0], Spine: [-0.08, 0, 0], Chest: [0, 0, 0], Neck: [0, 0, 0], Head: [0, 0, 0] };
+function seatSoldier() {
+  const seat = heli.getObjectByName('Seat_Pilot') || heli;
+  applyPose(SOL, 'stand');
+  for (const k in SEATED) J[k].rotation.set(...SEATED[k]);
+  J.Hips.position.y = HIP_Y; J.Hips.rotation.set(0, 0, 0);
+  seat.add(SOL.root); SOL.root.position.set(0, -0.86, 0.06); SOL.root.rotation.set(0, 0, 0);
+  sol.seated = true; AR.g.visible = false;
+}
+function standSoldier(x, z, yaw) {
+  scene.add(SOL.root); applyPose(SOL, 'stand'); sol.seated = false;
+  sol.pos.set(x, physGround(x, z), z); sol.vel.set(0, 0, 0); sol.yaw = yaw; sol.pitch = 0; sol.onGround = true;
+}
+function setMode(m) {
+  mode = m; firing = aiming = false;
+  $('tl').hidden = $('tr').hidden = m === 'foot'; $('footHud').hidden = m !== 'foot';
+  for (const id of ['tEng']) $(id).hidden = m === 'foot';
+  for (const id of ['tFire', 'tAim', 'tReload']) $(id).hidden = m !== 'foot';
+  if (m === 'heli') { input.mx = input.my = 0; camInit = true; if (camera.fov !== 62) { camera.fov = 62; camera.updateProjectionMatrix(); } }
+  showPrompt();
+}
+const _ihl = new THREE.Vector3();
+function nearHeli() { return mode === 'foot' && !fm.crashed && Math.hypot(sol.pos.x - fm.position.x, sol.pos.z - fm.position.z) < 5 && Math.abs(sol.pos.y - fm.position.y) < 3; }
+function toggleBoard() {
+  if (mode === 'foot') { if (nearHeli()) { seatSoldier(); setMode('heli'); setCam('chase'); } return; }
+  if (fm.agl > 1.5 || fm.velocity.length() > 3) { flashText = 'LAND TO GET OUT'; flashWarn = 2; return; }
+  heli.localToWorld(_ihl.set(-2.2, 0, 0.4));   // out on the right-hand side
+  _if.set(0, 0, 1).applyQuaternion(fm.quaternion);
+  standSoldier(_ihl.x, _ihl.z, Math.atan2(_if.x, _if.z) - Math.PI / 2);
+  setMode('foot');
+}
+// at a new start point: on the ground you begin on foot beside the helicopter, in the air you are flying it
+function placeSoldierForSpawn(air) {
+  if (air) { seatSoldier(); setMode('heli'); return; }
+  if ($('spawn').value === 'rwy32' && TARGETS.length) standSoldier(RANGE.x, RANGE.z, RANGE.yaw);
+  else { heli.localToWorld(_ihl.set(-3, 0, 0.5)); _if.set(0, 0, 1).applyQuaternion(fm.quaternion); standSoldier(_ihl.x, _ihl.z, Math.atan2(_if.x, _if.z) - Math.PI / 2); }
+  setMode('foot');
+}
+
+// ---- sound effects, generated (no recordings)
+let SFX = null;
+function sfx(kind, at) {
+  if (!audio || muted) return;
+  const ac = audio.ac;
+  if (!SFX) {
+    const make = (len, fn) => { const b = ac.createBuffer(1, Math.floor(ac.sampleRate * len), ac.sampleRate), d = b.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = fn(i / ac.sampleRate); return b; };
+    SFX = {
+      shot: make(0.45, t => (Math.random() * 2 - 1) * Math.exp(-t * 22) * 0.9 + Math.sin(t * 2 * Math.PI * 70) * Math.exp(-t * 14) * 0.6 + (Math.random() * 2 - 1) * Math.exp(-t * 5) * 0.12),
+      ding: make(0.9, t => (Math.sin(t * 2 * Math.PI * 1330) * 0.6 + Math.sin(t * 2 * Math.PI * 2210) * 0.3) * Math.exp(-t * 6) * Math.min(1, t * 400)),
+      click: make(0.05, t => (Math.random() * 2 - 1) * Math.exp(-t * 300) * 0.5),
+      reload: make(2.2, t => { const a = Math.exp(-((t - 0.25) ** 2) * 900), b = Math.exp(-((t - 1.6) ** 2) * 1200), c = Math.exp(-((t - 1.95) ** 2) * 1500); return (Math.random() * 2 - 1) * (a * 0.5 + b * 0.6 + c * 0.7); }),
+    };
+  }
+  const src = ac.createBufferSource(); src.buffer = SFX[kind];
+  const g = ac.createGain(); let vol = { shot: 0.8, ding: 0.5, click: 0.4, reload: 0.5 }[kind];
+  if (at) vol *= Math.min(1, 25 / Math.max(1, at.distanceTo(camera.position)));
+  g.gain.value = vol; src.playbackRate.value = kind === 'shot' ? 0.92 + Math.random() * 0.16 : 1;
+  src.connect(g).connect(ac.destination); src.start();
+}
+
+// ---- HUD for the soldier
+function updateFootHUD() {
+  if (mode !== 'foot') return;
+  const r = RIFLE.reload > 0 ? 'RELOADING' : RIFLE.mag + ' / ' + RIFLE.reserve;
+  const t = `AR-15 · ${RIFLE.auto ? 'AUTO' : 'SEMI'} · ${r}<br><span>Steel hits ${RIFLE.hits}</span>`;
+  if ($('footHud').innerHTML !== t) $('footHud').innerHTML = t;
+}
+function updateActPrompt() {
+  let t = '';
+  if (mode === 'foot' && nearHeli()) t = (isTouch ? 'Tap Board' : 'Press F') + ' to fly the Little Bird';
+  else if (mode === 'heli' && fm.agl < 1.5 && fm.velocity.length() < 3 && !fm.crashed) t = (isTouch ? 'Tap Board' : 'F') + ' to get out';
+  if ($('act').textContent !== t) $('act').textContent = t;
+  $('act').hidden = !t;
 }
 
 /* ================= keys & buttons ================= */
 addEventListener('keydown', e => {
   if (e.repeat || e.target.tagName === 'SELECT') return;
-  if (e.code === 'KeyE') { fm.toggleEngine(); startAudio(); showPrompt(); }
-  if (e.code === 'KeyR') { resetHeli(); showPrompt(); }
-  if (e.code === 'KeyC') setCam(camMode === 'cockpit' ? 'chase' : 'cockpit');
-  if (e.code === 'KeyO') setCam(camMode === 'orbit' ? 'chase' : 'orbit');
+  if (e.code === 'KeyF') { toggleBoard(); startAudio(); }
+  if (mode === 'foot') {
+    if (e.code === 'KeyR') reload();
+    if (e.code === 'KeyB') RIFLE.auto = !RIFLE.auto;
+  } else {
+    if (e.code === 'KeyE') { fm.toggleEngine(); startAudio(); showPrompt(); }
+    if (e.code === 'KeyR') { resetHeli(); showPrompt(); }
+    if (e.code === 'KeyC') setCam(camMode === 'cockpit' ? 'chase' : 'cockpit');
+    if (e.code === 'KeyO') setCam(camMode === 'orbit' ? 'chase' : 'orbit');
+  }
   if (e.code === 'KeyV') recentreCam();
   if (e.code === 'KeyH') $('card').hidden = !$('card').hidden;
   if (e.code === 'KeyZ') cycleMini(e.shiftKey ? -1 : 1);
@@ -1263,7 +1631,7 @@ const tick = () => new Promise(r => setTimeout(r, 0));
     status('Shading terrain…'); await tick();
     const { NM } = bakeMaps(); bar(0.75); await tick();
     buildPyramid(); initLabels();
-    status('Building the airfield…'); FEAT = await featP; buildAirfield(); Object.assign(window.littlebird, { doors: DOORS, ground: physGround }); buildMini(NM); bar(0.85);
+    status('Building the airfield…'); FEAT = await featP; buildAirfield(); buildRange(); Object.assign(window.littlebird, { doors: DOORS, ground: physGround, sol, RIFLE, TARGETS, toggleBoard, camera, fire: () => { firing = true; } }); buildMini(NM); bar(0.85);
     status('Loading Little Bird…');
     const gltf = await modelP;
     heli = gltf.scene; window.littlebird.heli = heli;
@@ -1284,16 +1652,24 @@ window.littlebird.step = (sec, inp) => { for (let i = 0; i < sec * 120; i++) { f
 renderer.setAnimationLoop(now => {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (ready) {
-    let inp = camMode === 'orbit' ? { collective: 0, pitch: 0, roll: 0, yaw: 0 } : input.read(dt);
-    if (isTouch) for (const k in touchIn) inp[k] = clamp((inp[k] || 0) + touchIn[k], -1, 1);
+    let inp = input.read(dt);
+    if (camMode === 'orbit' || mode === 'foot') inp = { collective: 0, pitch: 0, roll: 0, yaw: 0 };
+    else if (isTouch) for (const k in touchIn) inp[k] = clamp((inp[k] || 0) + touchIn[k], -1, 1);
     for (let i = 0; i < 2; i++) { fm.update(dt / 2, inp, { groundHeight: physGround }); buildingCheck(); }
     fm.applyTo(heli); fm.animateRotors(heli, dt);
-    sun.position.copy(fm.position).addScaledVector(sunDir, 40); sun.target.position.copy(fm.position);
-    updateCamera(dt); updateHUD(dt); updateAudio(); updateDust(dt);
+    if (mode === 'foot') updateSoldier(dt);
+    const focus = mode === 'foot' ? sol.pos : fm.position;
+    sun.position.copy(focus).addScaledVector(sunDir, 40); sun.target.position.copy(focus);
+    if (mode === 'foot') updateFootCamera(dt); else updateCamera(dt);
+    const fc = window.littlebird.freeCam; if (fc) { camera.position.set(...fc.p); camera.lookAt(...fc.t); }   // debugging aid
+    SOL.root.visible = !(sol.seated && camMode === 'cockpit');
+    updateRifle(dt); updateImpacts(dt); updateFootHUD(); updateActPrompt();
+    updateHUD(dt); updateAudio(); updateDust(dt);
     if (fm._promptEngine !== fm.engineOn) { fm._promptEngine = fm.engineOn; showPrompt(); }
     // helicopter's blob shadow on the terrain, cast along the sun
     const gy = groundHeight(fm.position.x, fm.position.z), t = (fm.position.y - gy) / sunDir.y;
     _sc.copy(fm.position).addScaledVector(sunDir, -t); U.shC.value.copy(_sc); U.shK.value = 0.55 * (1 - sstep(fm.position.y - gy, 15, 90));
+    if (mode === 'foot') { const sg = physGround(sol.pos.x, sol.pos.z); U.shC2.value.copy(sol.pos).addScaledVector(sunDir, -(sol.pos.y - sg) / sunDir.y); U.shK2.value = 0.5 * (1 - sstep(sol.pos.y - sg, 0.5, 4)); } else U.shK2.value = 0;
     if (VEG.on && Math.hypot(camera.position.x - VEG.cx, camera.position.z - VEG.cz) > 90) placeVeg(camera.position.x, camera.position.z);
     U.camPos.value.copy(camera.position); sky.position.copy(camera.position); U.uTime.value += dt; updateLamps(dt);
     updateTiles(); updateLabels(); drawMini();

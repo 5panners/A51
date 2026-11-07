@@ -1,5 +1,5 @@
-// Smoke test for the flight sim: serves sim/, loads it in headless Chromium, starts the engine,
-// lifts off, flies forward, and saves screenshots to smoke-out/.
+// Smoke test for the sim: serves sim/, loads it in headless Chromium, fires the AR-15 on foot,
+// boards the Little Bird, starts the engine, lifts off, flies forward, and saves screenshots to smoke-out/.
 //
 //   npm i -D playwright && npx playwright install chromium   (once)
 //   node tools/smoke_test.js                      # loads three.js from the CDN
@@ -38,6 +38,16 @@ const server = http.createServer((req, res) => {
     await page.keyboard.press('KeyH');
     await page.waitForTimeout(1000);
     await page.screenshot({ path: path.join(out, '0-pad.png') });
+    // on foot: fire one round, then walk up to the helicopter and get in
+    await page.evaluate(() => window.littlebird.fire());
+    await page.waitForFunction(() => window.littlebird.RIFLE.mag < 30, null, { timeout: 10000 }).catch(() => {});
+    const foot = await page.evaluate(() => {
+      const L = window.littlebird, mag = L.RIFLE.mag;
+      L.sol.pos.set(L.fm.position.x + 2.5, L.sol.pos.y, L.fm.position.z + 1); L.toggleBoard();
+      return { mag, seated: L.sol.seated };
+    });
+    console.log('on foot', JSON.stringify(foot));
+    await page.screenshot({ path: path.join(out, '0b-boarded.png') });
     const t = await page.evaluate(() => {
       const L = window.littlebird; L.fm.setEngine(true);
       L.step(5, { collective: 0, pitch: 0, roll: 0, yaw: 0 });     // spool up
@@ -49,7 +59,7 @@ const server = http.createServer((req, res) => {
     await page.waitForTimeout(1500);
     await page.screenshot({ path: path.join(out, '1-cruise.png') });
     console.log('telemetry', JSON.stringify(t));
-    const ok = !errors.length && !t.crashed && t.agl > 20 && t.kmh > 60 && t.rpm > 0.95;
+    const ok = !errors.length && foot.mag === 29 && foot.seated && !t.crashed && t.agl > 20 && t.kmh > 60 && t.rpm > 0.95;
     if (errors.length) console.error('page errors:\n' + errors.join('\n'));
     console.log(ok ? 'PASS' : 'FAIL', '- screenshots in smoke-out/');
     process.exitCode = ok ? 0 : 1;

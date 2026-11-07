@@ -32,9 +32,24 @@ The viewer works the same way (`--directory viewer`), or just open `viewer/index
 
 ## Sim controls
 
+On the ground you start on foot as a soldier with an AR-15, beside the parked Little Bird and a steel target range east of the runway 32 threshold. Walk up to the helicopter and press F to fly it. Land, and press F again to get out. Airborne starts put you straight in the pilot's seat.
+
+**On foot**
+
 | Key | Action |
 | --- | --- |
-| Click | Grab the mouse to fly (Esc releases) |
+| Click | Grab the mouse (Esc releases) |
+| WASD · mouse | Move · look |
+| Shift · Space | Sprint (rifle at low ready) · jump |
+| Left / right button | Fire · aim down the sights |
+| R · B | Reload (30 rounds, 210 spare) · semi / auto |
+| F | Get in the Little Bird (within 5 m) |
+
+**Flying**
+
+
+| Key | Action |
+| --- | --- |
 | E | Start / stop the engine (4 s spool) |
 | W / S | Collective up / down; release to hover |
 | Mouse | Pitch and roll (push forward = nose down) |
@@ -43,6 +58,7 @@ The viewer works the same way (`--directory viewer`), or just open `viewer/index
 | Wheel · V | Zoom · recentre camera |
 | C · O | Cockpit · inspect camera |
 | R | Reset to the chosen start |
+| F | Get out (landed, under 3 m/s) |
 | T | Day / dusk / night |
 | H | Hide the menu |
 | Z · Shift+Z | Zoom the minimap in / out (or click or scroll it) |
@@ -61,6 +77,8 @@ On touch screens two on-screen sticks appear. Start points: the threshold of run
 - **Minimap:** north-up and centred on the helicopter, with five zoom steps (82 km to 1.2 km). Click, scroll or press Z (Shift+Z zooms out). A 2048 px hillshade sits under the runways, taxiways, aprons, helipads and buildings, which are drawn at their real widths so they stay sharp when zoomed in. Hangars are drawn in blue-grey.
 - **Airfield:** `sim/groom-features.json` holds the runways, lakebed strips, stopways, taxiways, aprons, helipads and 310 building footprints from OpenStreetMap (via Overture Maps), already in the sim's metre frame. Paved surfaces are draped strips sampled every 12 m. One shader paints the markings (runway 14/32 numbers, threshold bars, aiming points, touchdown-zone rubber, centrelines, taxiway lines, stopway chevrons) and lifts the surfaces slightly with distance so coarse far terrain never covers them. Buildings are extruded footprints in one merged mesh. You can land on roofs; flying into a wall is a crash. Hangars get panelled doors with a header beam on the wall that faces the nearest apron or taxiway. Floodlights sit above the doors; other buildings get a personnel door with a light above it.
 - **Lights and time of day:** Day, Dusk and Night (menu or T) change the sun or moon, sky (stars at night), fog and exposure. The terrain shadows stay baked for one sun direction. All lights draw in one additive point batch that stays a few pixels wide at any distance: door floodlights, blinking red beacons on buildings 12 m and taller, runway edge and green threshold lights, and blue taxiway edge lights. The 24 floodlights nearest the camera light the ground, pavement and walls around them. The helicopter's navigation lights glow at dusk and night.
+- **Soldier:** `soldier.js` is the low-poly US Soldier Model (UCP uniform, IOTV vest, ACH helmet), unchanged from that project. The rifle is a procedural AR-15: lower and upper receiver, rail, M-LOK handguard, red dot, 30-round magazine and collapsible stock. Two-bone IK keeps his right hand on the pistol grip and his left on the handguard. The spine and chest carry the aim pitch, and the legs use the model's walk cycle scaled by speed. He can't walk through walls but can stand on roofs. The camera sits over his right shoulder, and aiming pulls it in and narrows the view.
+- **Shooting:** hitscan from the crosshair. The ray is marched through the terrain height grid (refined by bisection), building footprints and the steel targets (exact ray–box tests). Spread is tighter when aiming and wider when moving. Each shot has recoil, a muzzle flash, a tracer and an impact puff coloured by surface (dust, concrete, sparks on steel). Hit plates fall and reset after 4 s. The gunshot, the ring of steel, the dry click and the reload are all synthesised with WebAudio.
 - **Helicopter:** `littlebird.glb.b64.txt` (the model) and `littlebird-flight.js` (the flight model) come unchanged from the *Little Bird Test Flight* project. The physics samples the same height grid the GPU draws, using the same triangle split, so the skids touch the visible ground.
 
 Not modelled: roads, satellite imagery, or air density with altitude (the flight model has none). Overture has no widths, so the main runway uses its published 150 ft, taxiways 18 m and lakebed strips 12 m. Buildings without a height tag get 16 m (hangars) or 4–9 m by type.
@@ -93,4 +111,5 @@ It starts the engine, climbs, flies forward, checks the helicopter is airborne a
 - **Elevation:** [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on AWS Open Data, Terrarium encoding. In the US the source is mainly USGS 3DEP (public domain); see the [attribution notes](https://github.com/tilezen/joerd/blob/master/docs/attribution.md) for the full source list.
 - **Airfield and buildings:** © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, [ODbL](https://opendatacommons.org/licenses/odbl/); some building footprints from Microsoft ML Buildings (CDLA-Permissive-2.0); both via [Overture Maps](https://overturemaps.org) release 2026-10-21.0. `sim/groom-features.json` is a derived database under the ODbL.
 - **Place coordinates** (Groom Lake facility, Bald Mountain, Tikaboo Peak, Rachel, Papoose Lake) are approximate. Peak heights in the grid are within about 25 m of published figures.
+- **Soldier model:** from the US Soldier Model project (FOrest Sniper), by the same author.
 - **Libraries:** [three.js](https://threejs.org) (MIT), loaded from CDNs. Fonts: Saira Condensed and IBM Plex Mono via Google Fonts.
