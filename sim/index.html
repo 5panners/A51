@@ -110,7 +110,8 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
   <h1><small>Lincoln County, Nevada · 82 × 82 km of real terrain</small>Groom Lake Flight</h1>
   <div class="row"><span class="lab2">Start</span>
     <select id="spawn" aria-label="Start location">
-      <option value="pad">Groom Lake pad (on the ground)</option>
+      <option value="rwy32">Runway 32, Groom Lake (on the ground)</option>
+      <option value="ramp">Helipads, west ramp (on the ground)</option>
       <option value="base">Over the facility, 150 m</option>
       <option value="tikaboo">Tikaboo Peak, 150 m</option>
       <option value="rachel">Rachel, 150 m</option>
@@ -153,7 +154,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
     <kbd>M</kbd><span>Rotor sound on / off</span>
     <kbd>Pad</kbd><span>Left stick collective / yaw, right stick cyclic</span>
   </div>
-  <p class="note" id="srcNote">Terrain: Mapzen Terrarium elevation (AWS Open Data), 40 m grid. Ground colour is shaded from height and slope, not imagery; buildings and runways are not modelled. Helicopter model and flight model: your Little Bird Test Flight.</p>
+  <p class="note" id="srcNote">Terrain: Mapzen Terrarium elevation (AWS Open Data), 40 m grid; ground colour is shaded from height and slope, not imagery. Runways, taxiways, aprons and buildings: © OpenStreetMap contributors (ODbL) and Microsoft ML Buildings, via Overture Maps; widths and building heights are partly estimated. Helicopter and flight model: Little Bird Test Flight.</p>
 </div>
 
 <div id="touch" hidden>
@@ -206,6 +207,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 180000);
+scene.fog = new THREE.Fog(0xc6cacb, 2500, 70000);   // for the stock-material meshes (buildings, scrub); the terrain shaders do their own haze
 { const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; scene.environmentIntensity = 0.35; }
 const hemi = new THREE.HemisphereLight(0xbfd3e8, 0x8a7158, 1.1); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffe6c8, 3.0); sun.castShadow = true;
@@ -471,7 +473,7 @@ function placeVeg(cx, cz) {
     const x = (i + vhash(i, j, 1)) * STEP, z = (j + vhash(i, j, 2)) * STEP;
     const dd = (x - cx) ** 2 + (z - cz) ** 2; if (dd > R * R) continue;
     if (Math.abs(x) > HALF - 50 || Math.abs(z) > HALF - 50) continue;
-    const pl = playaAt(x, z); if (pl > 0.2) continue;
+    const pl = playaAt(x, z); if (pl > 0.2 || paveMask.has(Math.floor(x / PAVE_CELL) + ',' + Math.floor(z / PAVE_CELL))) continue;
     const r = vhash(i, j, 3), h = groundHeight(x, z), sl = slopeAt(x, z);
     const pjK = sstep(h + (vhash(i >> 3, j >> 3, 14) - 0.5) * 260, 1850, 2150);
     const dens = Math.max((0.42 - sl * 0.9) * (1 - pjK * 0.35), pjK * 0.45) * (1 - pl * 4);
@@ -495,25 +497,194 @@ function placeVeg(cx, cz) {
   VEG.cx = cx; VEG.cz = cz;
 }
 
-/* ================= landing pad at the start ================= */
-const PAD_LL = [37.2620, -115.8000];
-const [PADX, PADZ] = toXZ(...PAD_LL);
-let PADY = 0;
-const padGrp = new THREE.Group(); scene.add(padGrp);
-function buildPad() {
-  PADY = groundHeight(PADX, PADZ);
-  const pad = new THREE.Mesh(new THREE.CylinderGeometry(9, 9.6, 0.4, 32), new THREE.MeshLambertMaterial({ color: 0x77736a }));
-  pad.position.y = 0.0; pad.receiveShadow = true; padGrp.add(pad);
-  const hMat = new THREE.MeshLambertMaterial({ color: 0xeee8d8 });
-  const bar = (w, d, x, z) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, d), hMat); b.position.set(x, 0.22, z); padGrp.add(b); };
-  bar(0.9, 7, -2.1, 0); bar(0.9, 7, 2.1, 0); bar(3.4, 0.9, 0, 0);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(7.4, 7.9, 40), hMat); ring.rotation.x = -Math.PI / 2; ring.position.y = 0.23; padGrp.add(ring);
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 5, 6), new THREE.MeshLambertMaterial({ color: 0xbbbbbb })); pole.position.set(18, 2.5, 6); padGrp.add(pole);
-  const sock = new THREE.Mesh(new THREE.ConeGeometry(0.4, 2.2, 8, 1, true), new THREE.MeshLambertMaterial({ color: 0xff7a1a, side: THREE.DoubleSide })); sock.rotation.z = Math.PI / 2 - 0.15; sock.position.set(19.1, 4.7, 6); padGrp.add(sock);
-  padGrp.position.set(PADX, PADY, PADZ);
+/* ================= Groom Lake airfield: OpenStreetMap runways, taxiways, aprons and buildings (via Overture) ================= */
+// groom-features.json is built by tools/build_features.py, already in this world frame (metres).
+let FEAT = null, MAIN_RWY = null;
+const KIND = { paved: 0, taxiway: 1, apron: 2, lakebed: 3, stopway: 4, helipad: 5, dirt: 6 };
+const LIFT = [0.06, 0.04, 0.02, 0.01, 0.05, 0.03, 0.01];   // stacking order where surfaces overlap
+const PAVE_CELL = 10, paveMask = new Set();   // 10 m cells under pavement and buildings (keeps scrub off them)
+const markCell = (x, z) => paveMask.add(Math.floor(x / PAVE_CELL) + ',' + Math.floor(z / PAVE_CELL));
+const BLD_CELL = 60, bldGrid = new Map();
+function digitAtlas(labels) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 256; const x = c.getContext('2d');
+  x.fillStyle = '#000'; x.fillRect(0, 0, 512, 256); x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.font = '700 230px "Arial Narrow", Arial, sans-serif';
+  labels.forEach((t, i) => { x.save(); x.translate(128 + i * 256, 128); x.scale(0.62, 1); x.fillText(t, 0, 8); x.restore(); });
+  const tex = new THREE.CanvasTexture(c); tex.anisotropy = 8; tex.colorSpace = THREE.NoColorSpace; return tex;
 }
-// the physics ground: terrain, plus the pad deck
-function physGround(x, z) { const g = groundHeight(x, z); return Math.hypot(x - PADX, z - PADZ) < 9 ? Math.max(g, PADY + 0.2) : g; }
+const paveMat = new THREE.ShaderMaterial({
+  uniforms: { ...U, digits: { value: null } },
+  vertexShader: /* glsl */`
+    attribute vec4 aP; uniform vec3 camPos; varying vec3 vW; varying vec4 vP;
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    void main(){
+      vec3 p = position; float d = distance(p, camPos);
+      p.y += d * 0.0012;   // far terrain tiles are coarser than the grid: lift with distance so pavement never sinks into them
+      vW = p; vP = aP;
+      gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+      #include <logdepthbuf_vertex>
+    }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D nMap, sMap, digits; uniform vec3 sunDir, camPos, shC; uniform float shK, uHalf, uCell, uGN, uS;
+    varying vec3 vW; varying vec4 vP;
+    #include <logdepthbuf_pars_fragment>
+    ${SKY_GLSL}
+    ${NOISE_GLSL}
+    void main(){
+      #include <logdepthbuf_fragment>
+      vec2 g = (vW.xz + uHalf) / uCell;
+      vec3 n = normalize(texture2D(nMap, (g + 0.5) / uGN).xyz * 2.0 - 1.0);
+      float tsh = texture2D(sMap, (vW.xz + uHalf) / uS).r;
+      float dist = length(vW - camPos);
+      int kind = int(floor(vP.w / 100.0 + 0.5)); float W = mod(vP.w, 100.0);
+      float u = vP.x, v = vP.y, L = vP.z, av = abs(v);
+      float nz = vnoise(vW.xz * 0.08), nf = vnoise(vW.xz * 1.3), aa = clamp(dist / 900.0, 0.0, 1.0);
+      vec3 col; float paint = 0.0; vec3 paintC = vec3(0.92);
+      if (kind == 0) {                      // main runway: concrete, rubbered touchdown zones, painted markings
+        col = srgb(vec3(0.62,0.61,0.58)) * (0.9 + 0.1 * nz) * (0.96 + 0.04 * nf);
+        float tdz = max(1.0 - smoothstep(150.0, 650.0, u), 1.0 - smoothstep(150.0, 650.0, L - u)) * (1.0 - smoothstep(4.0, 11.0, av));
+        col *= 1.0 - 0.38 * tdz * (0.6 + 0.4 * vnoise(vec2(u * 0.05, v * 0.6)));
+        float s = min(u, L - u);
+        paint = max(paint, step(W * 0.5 - 1.8, av) * step(av, W * 0.5 - 0.9));                                  // edge lines
+        paint = max(paint, step(av, 0.45) * step(mod(u, 60.0), 36.0) * step(110.0, s));                          // centreline dashes
+        paint = max(paint, step(6.0, s) * step(s, 51.0) * step(1.8, av) * step(av, W * 0.5 - 3.0) * step(fract(av / 3.4), 0.55)); // threshold bars
+        paint = max(paint, step(300.0, s) * step(s, 345.0) * step(4.5, av) * step(av, 10.5));                    // aiming points
+        if (s > 66.0 && s < 84.0 && av < 6.0) {                                                                // runway numbers
+          bool e0 = u < L - u; float tx = ((e0 ? v : -v) + 6.0) / 12.0, ty = (s - 66.0) / 18.0;
+          paint = max(paint, texture2D(digits, vec2(((e0 ? 0.0 : 1.0) + tx) * 0.5, ty)).r);
+        }
+      } else if (kind == 1) {               // taxiway: asphalt, yellow centreline
+        col = srgb(vec3(0.42,0.41,0.39)) * (0.9 + 0.1 * nz);
+        paint = step(av, 0.18); paintC = srgb(vec3(0.85,0.68,0.20));
+      } else if (kind == 2 || kind == 5) {  // aprons and helipads: concrete slabs
+        col = srgb(vec3(0.66,0.65,0.62)) * (0.92 + 0.08 * nz);
+        vec2 j = abs(fract(vW.xz / 7.5) - 0.5); col *= 1.0 - 0.12 * (1.0 - aa) * step(0.47, max(j.x, j.y));
+        if (kind == 5) { col *= 1.06; }
+      } else if (kind == 3) {               // lakebed runway strips: graded, slightly darker clay
+        col = srgb(vec3(0.66,0.62,0.55)) * (0.95 + 0.05 * nz);
+      } else if (kind == 4) {               // stopway: asphalt with yellow chevrons
+        col = srgb(vec3(0.36,0.35,0.33)) * (0.9 + 0.1 * nz);
+        paint = step(fract((u + av * 0.9) / 30.0), 0.12) * step(av, W * 0.5 - 1.5); paintC = srgb(vec3(0.85,0.68,0.20));
+      } else {                              // old dirt strips
+        col = srgb(vec3(0.60,0.52,0.42)) * (0.92 + 0.08 * nz);
+      }
+      paint *= 1.0 - 0.5 * aa;              // markings fade into the surface far away instead of shimmering
+      col = mix(col, paintC * (0.95 + 0.05 * nf), paint);
+      float ndl = max(dot(n, sunDir), 0.0);
+      float hs = 1.0 - shK * (1.0 - smoothstep(1.8, 5.2, length(vW.xz - shC.xz)));
+      vec3 Lc = srgb(vec3(1.0,0.90,0.76)) * 3.2 * ndl * tsh * hs + srgb(vec3(0.55,0.66,0.82)) * (0.62 + 0.38 * n.y) * 0.95;
+      col *= Lc;
+      vec3 vd = normalize(vW - camPos);
+      float hk = exp(-max(min(camPos.y, vW.y) - 1100.0, 0.0) / 2600.0);
+      col = mix(col, skyColor(vd, 0.0) * 0.97, 1.0 - exp(-dist * hk / 52000.0));
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+});
+function buildAirfield() {
+  const P = [], A = [], I = [];
+  const vtx = (x, z, u, v, L, k, w) => { P.push(x, groundHeight(x, z) + LIFT[k], z); A.push(u, v, L, k * 100 + Math.min(w, 99)); return P.length / 3 - 1; };
+  // a strip draped over the terrain: samples every <= 12 m along, 5 across
+  function ribbon(pts, w, k) {
+    const S2 = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x0, z0] = pts[i], [x1, z1] = pts[i + 1], len = Math.hypot(x1 - x0, z1 - z0), n = Math.max(1, Math.ceil(len / 12));
+      for (let j = (i ? 1 : 0); j <= n; j++) S2.push([x0 + (x1 - x0) * j / n, z0 + (z1 - z0) * j / n]);
+    }
+    if (S2.length < 2) return;
+    const U2 = [0]; for (let i = 1; i < S2.length; i++) U2.push(U2[i - 1] + Math.hypot(S2[i][0] - S2[i - 1][0], S2[i][1] - S2[i - 1][1]));
+    const L = U2[U2.length - 1], OFF = [-0.5, -0.25, 0, 0.25, 0.5], base = P.length / 3;
+    for (let i = 0; i < S2.length; i++) {
+      const a = S2[Math.max(0, i - 1)], b = S2[Math.min(S2.length - 1, i + 1)];
+      let tx = b[0] - a[0], tz = b[1] - a[1]; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      const rx = -tz, rz = tx;   // the right-hand side when facing along the strip
+      for (const o of OFF) { const v = o * w; vtx(S2[i][0] + rx * v, S2[i][1] + rz * v, U2[i], v, L, k, w); }
+      for (let s = 0; s * PAVE_CELL < w; s++) { const v = -w / 2 + s * PAVE_CELL; markCell(S2[i][0] + rx * v, S2[i][1] + rz * v); }
+    }
+    for (let i = 0; i < S2.length - 1; i++) for (let j = 0; j < 4; j++) {
+      const a = base + i * 5 + j, b = a + 1, c = a + 5, d = c + 1; I.push(a, b, c, b, d, c);
+    }
+  }
+  // a polygon draped over the terrain: triangulate, then split triangles until edges are <= 14 m
+  function area(ring, k) {
+    const c2 = ring.map(([x, z]) => new THREE.Vector2(x, z)), tris = THREE.ShapeUtils.triangulateShape(c2, []);
+    const out = (p, q, r) => {
+      const e = [Math.hypot(p[0] - q[0], p[1] - q[1]), Math.hypot(q[0] - r[0], q[1] - r[1]), Math.hypot(r[0] - p[0], r[1] - p[1])], m = Math.max(...e);
+      if (m > 14) { const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (m === e[0]) { const h = mid(p, q); out(p, h, r); out(h, q, r); } else if (m === e[1]) { const h = mid(q, r); out(p, q, h); out(p, h, r); } else { const h = mid(r, p); out(p, q, h); out(h, q, r); } return; }
+      const ia = vtx(p[0], p[1], p[0], p[1], 0, k, 0), ib = vtx(q[0], q[1], q[0], q[1], 0, k, 0), ic = vtx(r[0], r[1], r[0], r[1], 0, k, 0);
+      // face up: in x/z with z pointing south, a counter-clockwise triangle seen from above has negative cross product
+      const cr = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+      if (cr < 0) I.push(ia, ib, ic); else I.push(ia, ic, ib);
+    };
+    for (const [a, b, c] of tris) out(ring[a], ring[b], ring[c]);
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const [x, z] of ring) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    for (let x = x0; x <= x1; x += PAVE_CELL) for (let z = z0; z <= z1; z += PAVE_CELL) if (inRing(ring, x, z)) markCell(x, z);
+  }
+  for (const r of FEAT.runways) { ribbon(r.pts, r.w, KIND[r.kind]); if (r.kind === 'paved' && !MAIN_RWY) MAIN_RWY = r; }
+  for (const t of FEAT.taxiways) ribbon(t.pts, t.w, KIND.taxiway);
+  for (const a of FEAT.aprons) area(a, KIND.apron);
+  for (const h of FEAT.helipads) area(h, KIND.helipad);
+  paveMat.uniforms.digits.value = digitAtlas(MAIN_RWY ? MAIN_RWY.ends : ['', '']);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('aP', new THREE.Float32BufferAttribute(A, 4)); g.setIndex(I);
+  const mesh = new THREE.Mesh(g, paveMat); mesh.frustumCulled = false; scene.add(mesh);
+  buildBuildings();
+}
+function inRing(r, x, z) { let c = false; for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const [xi, zi] = r[i], [xj, zj] = r[j]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; }
+// buildings: extruded footprints, one merged mesh; also a coarse grid for collision and roof landings
+function buildBuildings() {
+  const P = [], N = [], C = [], col = new THREE.Color(), _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _n = new THREE.Vector3();
+  const tri = (a, b, c, n, cl) => {   // keep the winding consistent with the normal so faces are not culled
+    _a.fromArray(a); _b.fromArray(b); _c.fromArray(c); const f = _b.sub(_a).cross(_c.clone().sub(_a)).dot(n) >= 0;
+    for (const p of f ? [a, b, c] : [a, c, b]) { P.push(...p); N.push(n.x, n.y, n.z); C.push(cl.r, cl.g, cl.b); }
+  };
+  const TONE = { hangar: 0xd8d5ce, industrial: 0xcfc7b6, warehouse: 0xd4cbb8, bunker: 0x9f977f, fire_station: 0xc9a48a };
+  for (const b of FEAT.buildings) {
+    const r = b.r; if (r.length < 3) continue;
+    let lo = 1e9, hi = -1e9, cx = 0, cz = 0;
+    for (const [x, z] of r) { const h = groundHeight(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h); cx += x / r.length; cz += z / r.length; }
+    const y0 = lo - 1, top = hi + b.h; b.top = top;
+    const hsh = vhash(Math.round(cx), Math.round(cz), 21);
+    col.set(TONE[b.c] ?? 0xe0d9c9).offsetHSL(0, 0, (hsh - 0.5) * 0.08);
+    const wallC = col.clone(), roofC = col.clone().multiplyScalar(0.86);
+    for (let i = 0; i < r.length; i++) {
+      const [x0, z0] = r[i], [x1, z1] = r[(i + 1) % r.length];
+      _n.set(z1 - z0, 0, -(x1 - x0)).normalize();
+      if (_n.x * ((x0 + x1) / 2 - cx) + _n.z * ((z0 + z1) / 2 - cz) < 0) _n.negate();   // point the wall away from the centre
+      const n = _n.clone();
+      tri([x0, y0, z0], [x1, y0, z1], [x1, top, z1], n, wallC); tri([x0, y0, z0], [x1, top, z1], [x0, top, z0], n, wallC);
+    }
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const [a, bb, c] of THREE.ShapeUtils.triangulateShape(r.map(([x, z]) => new THREE.Vector2(x, z)), []))
+      tri([r[a][0], top, r[a][1]], [r[bb][0], top, r[bb][1]], [r[c][0], top, r[c][1]], up, roofC);
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const [x, z] of r) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    for (let gx = Math.floor(x0 / BLD_CELL); gx <= Math.floor(x1 / BLD_CELL); gx++) for (let gz = Math.floor(z0 / BLD_CELL); gz <= Math.floor(z1 / BLD_CELL); gz++) {
+      const k = gx + ',' + gz; (bldGrid.get(k) || bldGrid.set(k, []).get(k)).push(b);
+    }
+    for (let x = x0; x <= x1; x += PAVE_CELL) for (let z = z0; z <= z1; z += PAVE_CELL) markCell(x, z);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true })); m.receiveShadow = true; scene.add(m);
+}
+function buildingAt(x, z) {
+  const list = bldGrid.get(Math.floor(x / BLD_CELL) + ',' + Math.floor(z / BLD_CELL)); if (!list) return null;
+  for (const b of list) if (inRing(b.r, x, z)) return b; return null;
+}
+// the physics ground: terrain, or a roof you can land on
+function physGround(x, z) { const g = groundHeight(x, z); if (!bldGrid.size) return g; const b = buildingAt(x, z); return b ? Math.max(g, b.top) : g; }
+// flying into a wall (not onto the roof) is a crash
+const _hubW = new THREE.Vector3();
+function buildingCheck() {
+  if (fm.crashed || !bldGrid.size) return;
+  for (const p of [[0, 2.6, 0], [0, 1.0, 1.6], [0, 1.2, -3.5]]) {
+    _hubW.fromArray(p).applyQuaternion(fm.quaternion).add(fm.position);
+    const b = buildingAt(_hubW.x, _hubW.z); if (b && _hubW.y < b.top - 0.8) { fm._crash('building'); return; }
+  }
+}
 
 /* ================= rotor dust ================= */
 const DN = 500;
@@ -599,6 +770,8 @@ function drawMini() {
   mctx.fillStyle = '#f2b84b'; mctx.strokeStyle = '#1b1a17'; mctx.lineWidth = 2.5;
   mctx.beginPath(); mctx.moveTo(0, -13); mctx.lineTo(8, 9); mctx.lineTo(0, 4); mctx.lineTo(-8, 9); mctx.closePath(); mctx.stroke(); mctx.fill();
   mctx.restore();
+  if (FEAT) { mctx.strokeStyle = 'rgba(40,38,34,.9)'; mctx.lineCap = 'round';
+    for (const r of FEAT.runways) { mctx.lineWidth = r.kind === 'paved' ? 3 : 1.5; mctx.beginPath(); r.pts.forEach(([x, z], i) => { const [u, v] = m(x, z); i ? mctx.lineTo(u, v) : mctx.moveTo(u, v); }); mctx.stroke(); } }
   mctx.fillStyle = '#ece6da'; mctx.fillText('N', R / 2 - 5, 18);
 }
 
@@ -619,7 +792,9 @@ function setLoadout(id) {
   ['ldBench', 'ldGuns', 'ldClean'].forEach(k => $(k).setAttribute('aria-pressed', k === id));
 }
 const SPAWNS = {
-  pad: () => ({ x: PADX, z: PADZ, agl: 0.25, hdg: 0, air: false }),
+  rwy32: () => { const p = MAIN_RWY.pts, [x1, z1] = p[p.length - 1], [x0, z0] = p[p.length - 2], l = Math.hypot(x1 - x0, z1 - z0);
+    return { x: x1 + (x0 - x1) / l * 28, z: z1 + (z0 - z1) / l * 28, agl: 0.25, hdg: (MAIN_RWY.hdg + 180) % 360, air: false }; },
+  ramp: () => { const r = FEAT.helipads[0] || FEAT.aprons[0]; let x = 0, z = 0; for (const q of r) { x += q[0] / r.length; z += q[1] / r.length; } return { x, z, agl: 0.25, hdg: 60, air: false }; },
   base: () => { const [x, z] = toXZ(37.2431, -115.7930); return { x: x - 600, z: z + 900, agl: 150, hdg: 20, air: true }; },
   tikaboo: () => { const [x, z] = toXZ(37.3442, -115.3590); return { x: x + 400, z, agl: 150, hdg: 270, air: true }; },
   rachel: () => { const [x, z] = toXZ(37.6455, -115.7449); return { x, z: z - 500, agl: 150, hdg: 180, air: true }; },
@@ -639,7 +814,7 @@ function loadModel() {
     .then(b64 => new Promise((res, rej) => { const bin = Uint8Array.from(atob(b64.trim()), c => c.charCodeAt(0)); new GLTFLoader().parse(bin.buffer, './', res, rej); }));
 }
 let crashMsg = '', flashWarn = 0, flashText = '';
-fm.on('crash', e => { crashMsg = e.reason === 'strike' ? 'Rotor strike: ground' : e.reason === 'rollover' ? 'Rolled over' : 'Crashed'; });
+fm.on('crash', e => { crashMsg = e.reason === 'building' ? 'Hit a building' : e.reason === 'strike' ? 'Rotor strike' : e.reason === 'rollover' ? 'Rolled over' : 'Crashed'; });
 fm.on('hardLanding', () => { flashText = 'HARD LANDING'; flashWarn = 2.5; });
 
 /* ================= cameras (from your test page) ================= */
@@ -841,11 +1016,12 @@ async function loadTerrain() {
 const tick = () => new Promise(r => setTimeout(r, 0));
 (async () => {
   try {
-    const modelP = loadModel();
+    const modelP = loadModel(), featP = fetch('./groom-features.json').then(r => { if (!r.ok) throw new Error('airfield ' + r.status); return r.json(); });
     status('Loading terrain…'); await loadTerrain();
     status('Shading terrain…'); await tick();
     const { NM } = bakeMaps(); bar(0.75); await tick();
-    buildPyramid(); buildPad(); initLabels(); buildMini(NM); bar(0.85);
+    buildPyramid(); initLabels();
+    status('Building the airfield…'); FEAT = await featP; buildAirfield(); buildMini(NM); bar(0.85);
     status('Loading Little Bird…');
     const gltf = await modelP;
     heli = gltf.scene; window.littlebird.heli = heli;
@@ -861,13 +1037,13 @@ function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h
 addEventListener('resize', resize); resize();
 let last = performance.now(), fpsAcc = 0, fpsN = 0, fpsT = 0;
 const _sc = new THREE.Vector3();
-window.littlebird.step = (sec, inp) => { for (let i = 0; i < sec * 120; i++) fm.update(1 / 120, inp, { groundHeight: physGround }); fm.applyTo(heli); fm.animateRotors(heli, 1 / 60); camInit = true; };
+window.littlebird.step = (sec, inp) => { for (let i = 0; i < sec * 120; i++) { fm.update(1 / 120, inp, { groundHeight: physGround }); buildingCheck(); } fm.applyTo(heli); fm.animateRotors(heli, 1 / 60); camInit = true; };
 renderer.setAnimationLoop(now => {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (ready) {
     let inp = camMode === 'orbit' ? { collective: 0, pitch: 0, roll: 0, yaw: 0 } : input.read(dt);
     if (isTouch) for (const k in touchIn) inp[k] = clamp((inp[k] || 0) + touchIn[k], -1, 1);
-    for (let i = 0; i < 2; i++) fm.update(dt / 2, inp, { groundHeight: physGround });
+    for (let i = 0; i < 2; i++) { fm.update(dt / 2, inp, { groundHeight: physGround }); buildingCheck(); }
     fm.applyTo(heli); fm.animateRotors(heli, dt);
     sun.position.copy(fm.position).addScaledVector(sunDir, 40); sun.target.position.copy(fm.position);
     updateCamera(dt); updateHUD(dt); updateAudio(); updateDust(dt);

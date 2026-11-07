@@ -12,7 +12,7 @@ const http = require('http'), fs = require('fs'), path = require('path');
 const root = path.join(__dirname, '..', 'sim');
 const ti = process.argv.indexOf('--three'), threeDir = ti > 0 ? path.resolve(process.argv[ti + 1]) : null;
 const out = path.join(__dirname, '..', 'smoke-out'); fs.mkdirSync(out, { recursive: true });
-const TYPES = { '.js': 'text/javascript', '.html': 'text/html', '.txt': 'text/plain' };
+const TYPES = { '.js': 'text/javascript', '.html': 'text/html', '.txt': 'text/plain', '.json': 'application/json' };
 
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent(req.url.split('?')[0]);
