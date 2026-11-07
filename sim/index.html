@@ -139,6 +139,11 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
     <button id="gLbl" aria-pressed="true">Labels</button>
     <button id="gFps" aria-pressed="false">FPS</button>
   </div>
+  <div class="row"><span class="lab2">Time</span>
+    <button id="tDay" aria-pressed="true">Day</button>
+    <button id="tDusk" aria-pressed="false">Dusk</button>
+    <button id="tNight" aria-pressed="false">Night</button>
+  </div>
   <button id="toggleKeys" aria-expanded="true">Hide controls</button>
   <div class="keys" id="keys">
     <kbd>Click</kbd><span>Grab the mouse to fly (Esc releases)</span>
@@ -150,6 +155,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
     <kbd>Wheel · V</kbd><span>Zoom · recentre camera</span>
     <kbd>C · O</kbd><span>Cockpit · inspect camera</span>
     <kbd>R</kbd><span>Reset to the start</span>
+    <kbd>T</kbd><span>Day / dusk / night</span>
     <kbd>H</kbd><span>Hide this panel</span>
     <kbd>Z · Shift+Z</kbd><span>Zoom the map in / out (or click or scroll it)</span>
     <kbd>M</kbd><span>Rotor sound on / off</span>
@@ -216,23 +222,37 @@ sun.shadow.mapSize.set(1024, 1024); Object.assign(sun.shadow.camera, { left: -9,
 sun.shadow.bias = -0.0004; scene.add(sun, sun.target);
 
 /* ================= shared GLSL ================= */
+const NLAMP = 24;
 const U = {
   sunDir: { value: sunDir }, camPos: { value: new THREE.Vector3() },
   uHalf: { value: HALF }, uCell: { value: CELL }, uGN: { value: GN }, uS: { value: S },
   hMap: { value: null }, nMap: { value: null }, sMap: { value: null },
   shC: { value: new THREE.Vector3(0, -1e5, 0) }, shK: { value: 0 },
+  uSunC: { value: new THREE.Vector3() }, uAmbC: { value: new THREE.Vector3() }, uSkyK: { value: new THREE.Vector3(1, 1, 1) },
+  uSunGlow: { value: 1 }, uNight: { value: 0 }, uLampK: { value: 0 }, uLightK: { value: 0.18 }, uTime: { value: 0 },
+  uLamps: { value: Array.from({ length: NLAMP }, () => new THREE.Vector4(0, -1e5, 0, 0)) },
 };
 const SKY_GLSL = /* glsl */`
+uniform vec3 uSkyK; uniform float uSunGlow, uNight;
 vec3 srgb(vec3 c){ return pow(c, vec3(2.2)); }
 vec3 skyColor(vec3 d, float disk){
   float y = max(d.y, 0.0);
   vec3 zen = srgb(vec3(0.27,0.47,0.78)), hor = srgb(vec3(0.80,0.82,0.83)), low = srgb(vec3(0.74,0.70,0.66));
   vec3 c = mix(hor, zen, pow(y, 0.55));
-  c = mix(low, c, smoothstep(-0.08, 0.02, d.y));
+  c = mix(low, c, smoothstep(-0.08, 0.02, d.y)) * uSkyK;
   float s = max(dot(d, sunDir), 0.0);
-  c += srgb(vec3(1.0,0.86,0.66)) * (pow(s, 6.0) * 0.35 + pow(s, 64.0) * 0.6);
-  c += vec3(30.0,26.0,20.0) * pow(s, 2400.0) * disk;
+  c += srgb(vec3(1.0,0.86,0.66)) * (pow(s, 6.0) * 0.35 + pow(s, 64.0) * 0.6) * uSunGlow;
+  c += vec3(30.0,26.0,20.0) * pow(s, 2400.0) * disk * uSunGlow;
   return c;
+}`;
+// light from the sun/moon, sky, and the nearest building floodlights (pools of light on the ground at night)
+const LIGHT_GLSL = /* glsl */`
+uniform vec3 uSunC, uAmbC; uniform vec4 uLamps[${NLAMP}]; uniform float uLampK;
+vec3 lamps(vec3 p){
+  if (uLampK <= 0.0) return vec3(0.0);
+  vec3 a = vec3(0.0);
+  for (int i = 0; i < ${NLAMP}; i++) { vec4 l = uLamps[i]; vec3 d = l.xyz - p; float r2 = dot(d, d); a += l.w / (1.0 + r2 * 0.0035) * (1.0 - smoothstep(2500.0, 6400.0, r2)); }
+  return a * srgb(vec3(1.0,0.80,0.55)) * uLampK;
 }`;
 const NOISE_GLSL = /* glsl */`
 float hash2(vec2 p){ p = mod(p, 289.0); p = fract(p * vec2(0.1271, 0.3117)); p += dot(p, p + 34.53); return fract(p.x * p.y); }
@@ -251,9 +271,12 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), new THREE.Shader
   fragmentShader: `uniform vec3 sunDir; varying vec3 vD;
     #include <logdepthbuf_pars_fragment>
     ${SKY_GLSL}
+    ${NOISE_GLSL}
     void main(){
       #include <logdepthbuf_fragment>
-      gl_FragColor = vec4(skyColor(normalize(vD), 1.0), 1.0);
+      vec3 d = normalize(vD), c = skyColor(d, 1.0);
+      if (uNight > 0.0) { vec2 q = floor(d.xz / (abs(d.y) + 0.6) * 520.0); c += vec3(0.85, 0.9, 1.0) * step(0.9968, hash2(q)) * smoothstep(0.02, 0.25, d.y) * uNight * (0.4 + 0.6 * hash2(q + 7.0)); }
+      gl_FragColor = vec4(c, 1.0);
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
     }`,
@@ -305,6 +328,7 @@ const terrainMat = new THREE.ShaderMaterial({
     varying vec3 vW;
     #include <logdepthbuf_pars_fragment>
     ${SKY_GLSL}
+    ${LIGHT_GLSL}
     ${NOISE_GLSL}
     void main(){
       #include <logdepthbuf_fragment>
@@ -348,9 +372,7 @@ const terrainMat = new THREE.ShaderMaterial({
       // light
       float ndl = max(dot(n, sunDir), 0.0);
       float hs = 1.0 - shK * (1.0 - smoothstep(1.8, 5.2, length(vW.xz - shC.xz)));
-      vec3 L = srgb(vec3(1.0,0.90,0.76)) * 3.2 * ndl * tsh * hs
-             + srgb(vec3(0.55,0.66,0.82)) * (0.62 + 0.38 * n.y) * 0.95
-             + srgb(vec3(0.62,0.52,0.42)) * 0.18 * (1.0 - n.y);
+      vec3 L = uSunC * ndl * tsh * hs + uAmbC * (0.62 + 0.38 * n.y) + uAmbC * vec3(1.0, 0.8, 0.6) * 0.19 * (1.0 - n.y) + lamps(vW);
       col *= L;
       // aerial perspective: denser haze low in the valleys
       vec3 vd = normalize(vW - camPos);
@@ -531,6 +553,7 @@ const paveMat = new THREE.ShaderMaterial({
     varying vec3 vW; varying vec4 vP;
     #include <logdepthbuf_pars_fragment>
     ${SKY_GLSL}
+    ${LIGHT_GLSL}
     ${NOISE_GLSL}
     void main(){
       #include <logdepthbuf_fragment>
@@ -574,7 +597,7 @@ const paveMat = new THREE.ShaderMaterial({
       col = mix(col, paintC * (0.95 + 0.05 * nf), paint);
       float ndl = max(dot(n, sunDir), 0.0);
       float hs = 1.0 - shK * (1.0 - smoothstep(1.8, 5.2, length(vW.xz - shC.xz)));
-      vec3 Lc = srgb(vec3(1.0,0.90,0.76)) * 3.2 * ndl * tsh * hs + srgb(vec3(0.55,0.66,0.82)) * (0.62 + 0.38 * n.y) * 0.95;
+      vec3 Lc = uSunC * ndl * tsh * hs + uAmbC * (0.62 + 0.38 * n.y) + lamps(vW);
       col *= Lc;
       vec3 vd = normalize(vW - camPos);
       float hk = exp(-max(min(camPos.y, vW.y) - 1100.0, 0.0) / 2600.0);
@@ -635,14 +658,40 @@ function buildAirfield() {
   buildBuildings();
 }
 function inRing(r, x, z) { let c = false; for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const [xi, zi] = r[i], [xj, zj] = r[j]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; }
-// buildings: extruded footprints, one merged mesh; also a coarse grid for collision and roof landings
+// buildings: extruded footprints with hangar doors and light fixtures, one merged mesh; also a coarse grid for collision and roof landings
+const LAMPS = [];          // wall-pack floodlights: [x, y, z, strength] — the nearest ones light the ground at night
+const DOORS = [];          // hangar doors: { x, z, nx, nz, w } (centre on the ground, outward normal, width)
+const SPRITES = [];        // every light point: [x, y, z, r, g, b, size, phase]  (phase < 0 = steady)
 function buildBuildings() {
   const P = [], N = [], C = [], col = new THREE.Color(), _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _n = new THREE.Vector3();
   const tri = (a, b, c, n, cl) => {   // keep the winding consistent with the normal so faces are not culled
     _a.fromArray(a); _b.fromArray(b); _c.fromArray(c); const f = _b.sub(_a).cross(_c.clone().sub(_a)).dot(n) >= 0;
     for (const p of f ? [a, b, c] : [a, c, b]) { P.push(...p); N.push(n.x, n.y, n.z); C.push(cl.r, cl.g, cl.b); }
   };
+  const quad = (a, b, c, d, n, cl) => { tri(a, b, c, n, cl); tri(a, c, d, n, cl); };
+  // a vertical rectangle on a wall: from s0 to s1 along the edge (x0,z0)->(x1,z1), heights y0..y1, pushed off the wall by `off`
+  const wallRect = (x0, z0, x1, z1, n, s0, s1, y0, y1, off, cl) => {
+    const P0 = [x0 + (x1 - x0) * s0 + n.x * off, z0 + (z1 - z0) * s0 + n.z * off], P1 = [x0 + (x1 - x0) * s1 + n.x * off, z0 + (z1 - z0) * s1 + n.z * off];
+    quad([P0[0], y0, P0[1]], [P1[0], y0, P1[1]], [P1[0], y1, P1[1]], [P0[0], y1, P0[1]], n, cl);
+  };
+  // a small box (light housing) sticking out of a wall
+  const housing = (x, y, z, n, w, h, d, cl) => {
+    const t = new THREE.Vector3(-n.z, 0, n.x), up = new THREE.Vector3(0, 1, 0), c0 = new THREE.Vector3(x, y, z);
+    const corner = (a, b, e) => c0.clone().addScaledVector(t, a * w / 2).addScaledVector(up, b * h / 2).addScaledVector(n, e * d).toArray();
+    quad(corner(-1, -1, 1), corner(1, -1, 1), corner(1, 1, 1), corner(-1, 1, 1), n, cl);
+    quad(corner(-1, -1, 0), corner(-1, -1, 1), corner(-1, 1, 1), corner(-1, 1, 0), t.clone().negate(), cl);
+    quad(corner(1, -1, 0), corner(1, 1, 0), corner(1, 1, 1), corner(1, -1, 1), t, cl);
+    quad(corner(-1, 1, 0), corner(-1, 1, 1), corner(1, 1, 1), corner(1, 1, 0), up, cl);
+    quad(corner(-1, -1, 0), corner(1, -1, 0), corner(1, -1, 1), corner(-1, -1, 1), up.clone().negate(), cl);
+  };
+  // hangar doors face the nearest apron or taxiway
+  const targets = [];
+  for (const r of FEAT.aprons) { let x = 0, z = 0; for (const q of r) { x += q[0] / r.length; z += q[1] / r.length; } targets.push([x, z]); }
+  for (const t of FEAT.taxiways) for (const q of t.pts) targets.push(q);
+  const nearestTarget = (x, z) => { let best = null, bd = 1e12; for (const q of targets) { const d = (q[0] - x) ** 2 + (q[1] - z) ** 2; if (d < bd) { bd = d; best = q; } } return bd < 600 * 600 ? best : null; };
   const TONE = { hangar: 0xd8d5ce, industrial: 0xcfc7b6, warehouse: 0xd4cbb8, bunker: 0x9f977f, fire_station: 0xc9a48a };
+  const DOOR_A = new THREE.Color(0x7c868f), DOOR_B = new THREE.Color(0x8a949c), BEAM = new THREE.Color(0x454b52), PDOOR = new THREE.Color(0x4a4d50), HOUSE = new THREE.Color(0x2b2d30);
+  const WARM = [1.0, 0.82, 0.56], RED = [1.0, 0.12, 0.08];
   for (const b of FEAT.buildings) {
     const r = b.r; if (r.length < 3) continue;
     let lo = 1e9, hi = -1e9, cx = 0, cz = 0;
@@ -651,16 +700,60 @@ function buildBuildings() {
     const hsh = vhash(Math.round(cx), Math.round(cz), 21);
     col.set(TONE[b.c] ?? 0xe0d9c9).offsetHSL(0, 0, (hsh - 0.5) * 0.08);
     const wallC = col.clone(), roofC = col.clone().multiplyScalar(0.86);
+    const walls = [];
     for (let i = 0; i < r.length; i++) {
       const [x0, z0] = r[i], [x1, z1] = r[(i + 1) % r.length];
       _n.set(z1 - z0, 0, -(x1 - x0)).normalize();
       if (_n.x * ((x0 + x1) / 2 - cx) + _n.z * ((z0 + z1) / 2 - cz) < 0) _n.negate();   // point the wall away from the centre
       const n = _n.clone();
       tri([x0, y0, z0], [x1, y0, z1], [x1, top, z1], n, wallC); tri([x0, y0, z0], [x1, top, z1], [x0, top, z0], n, wallC);
+      walls.push({ x0, z0, x1, z1, n, len: Math.hypot(x1 - x0, z1 - z0) });
     }
     const up = new THREE.Vector3(0, 1, 0);
     for (const [a, bb, c] of THREE.ShapeUtils.triangulateShape(r.map(([x, z]) => new THREE.Vector2(x, z)), []))
       tri([r[a][0], top, r[a][1]], [r[bb][0], top, r[bb][1]], [r[c][0], top, r[c][1]], up, roofC);
+    // doors and lights
+    if (walls.length && b.h >= 2.5) {
+      const hangar = b.c === 'hangar' || (b.h >= 12 && walls.some(w => w.len > 30));
+      let door = walls.reduce((a, w) => w.len > a.len ? w : a, walls[0]);
+      if (hangar) {
+        let best = -1;
+        for (const w of walls) {
+          if (w.len < 12) continue;
+          const mx = (w.x0 + w.x1) / 2, mz = (w.z0 + w.z1) / 2, t = nearestTarget(mx, mz);
+          const face = t ? Math.max(0, (w.n.x * (t[0] - mx) + w.n.z * (t[1] - mz)) / (Math.hypot(t[0] - mx, t[1] - mz) || 1)) : 0.3;
+          const sc = w.len * (0.2 + face); if (sc > best) { best = sc; door = w; }
+        }
+      }
+      const w = door, gy = Math.max(groundHeight(w.x0, w.z0), groundHeight(w.x1, w.z1));
+      if (hangar && w.len >= 12) {
+        // big sliding doors: panels with gaps, a header beam, floodlights above
+        const s0 = 0.1, s1 = 0.9, dTop = gy + Math.max(4, Math.min(b.h * 0.82, b.h - 1.5)), np = Math.max(2, Math.round(w.len * (s1 - s0) / 7)), gap = 0.18 / w.len;
+        for (let i = 0; i < np; i++) {
+          const a = s0 + (s1 - s0) * i / np, c = s0 + (s1 - s0) * (i + 1) / np;
+          wallRect(w.x0, w.z0, w.x1, w.z1, w.n, a + gap, c - gap, gy - 0.2, dTop, 0.07 + (i % 2) * 0.05, i % 2 ? DOOR_B : DOOR_A);
+        }
+        wallRect(w.x0, w.z0, w.x1, w.z1, w.n, s0 - 0.01, s1 + 0.01, dTop, Math.min(dTop + 0.7, top - 0.2), 0.14, BEAM);
+        DOORS.push({ x: (w.x0 + w.x1) / 2, z: (w.z0 + w.z1) / 2, nx: w.n.x, nz: w.n.z, w: w.len * (s1 - s0) });
+        const k = clamp(Math.round(w.len * (s1 - s0) / 14), 2, 6), ly = Math.min(dTop + 1.4, top - 0.4);
+        for (let i = 0; i < k; i++) {
+          const s = s0 + (s1 - s0) * (i + 0.5) / k, x = w.x0 + (w.x1 - w.x0) * s, z = w.z0 + (w.z1 - w.z0) * s;
+          housing(x, ly, z, w.n, 0.7, 0.35, 0.45, HOUSE);
+          SPRITES.push([x + w.n.x * 0.5, ly - 0.2, z + w.n.z * 0.5, ...WARM, 1.6, -1]);
+          LAMPS.push([x + w.n.x * 4, ly, z + w.n.z * 4, 2.6]);
+        }
+      } else if (w.len >= 3) {
+        // a personnel door with a light above it
+        const dw = Math.min(1.2, w.len * 0.3) / w.len;
+        wallRect(w.x0, w.z0, w.x1, w.z1, w.n, 0.5 - dw / 2, 0.5 + dw / 2, gy - 0.1, gy + 2.2, 0.05, PDOOR);
+        const x = (w.x0 + w.x1) / 2, z = (w.z0 + w.z1) / 2, ly = Math.min(gy + 2.8, top - 0.3);
+        housing(x, ly, z, w.n, 0.35, 0.22, 0.25, HOUSE);
+        SPRITES.push([x + w.n.x * 0.32, ly - 0.12, z + w.n.z * 0.32, ...WARM, 0.9, -1]);
+        LAMPS.push([x + w.n.x * 2, ly, z + w.n.z * 2, 1.4]);
+      }
+      // red obstruction beacon on tall buildings
+      if (b.h >= 12) SPRITES.push([cx, top + 0.6, cz, ...RED, 2.2, hsh]);
+    }
     let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const [x, z] of r) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
     for (let gx = Math.floor(x0 / BLD_CELL); gx <= Math.floor(x1 / BLD_CELL); gx++) for (let gz = Math.floor(z0 / BLD_CELL); gz <= Math.floor(z1 / BLD_CELL); gz++) {
       const k = gx + ',' + gz; (bldGrid.get(k) || bldGrid.set(k, []).get(k)).push(b);
@@ -669,7 +762,81 @@ function buildBuildings() {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
-  const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true })); m.receiveShadow = true; scene.add(m);
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  // the floodlights light the walls and doors too (same lamp list as the ground)
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, { uLamps: U.uLamps, uLampK: U.uLampK, uSunC: U.uSunC, uAmbC: U.uAmbC });
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWp;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWp;\nvec3 srgb(vec3 c){ return pow(c, vec3(2.2)); }\n' + LIGHT_GLSL)
+      .replace('#include <opaque_fragment>', 'outgoingLight += diffuseColor.rgb * lamps(vWp) * 0.2;\n#include <opaque_fragment>');
+  };
+  const m = new THREE.Mesh(g, mat); m.receiveShadow = true; scene.add(m);
+  buildAirfieldLights(); buildLightSprites();
+}
+// runway edge and threshold lights, blue taxiway edge lights
+function buildAirfieldLights() {
+  const along = (pts, step, cb) => {
+    let carry = 0, s = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x0, z0] = pts[i], [x1, z1] = pts[i + 1], len = Math.hypot(x1 - x0, z1 - z0); if (!len) continue;
+      const tx = (x1 - x0) / len, tz = (z1 - z0) / len;
+      for (let d = carry; d <= len; d += step) cb(x0 + tx * d, z0 + tz * d, tx, tz, s + d);
+      carry = (carry - len) % step; if (carry < 0) carry += step; s += len;
+    }
+  };
+  const put = (x, z, c, size) => SPRITES.push([x, groundHeight(x, z) + 0.45, z, ...c, size, -1]);
+  const WHITE = [1.0, 0.95, 0.85], GREEN = [0.25, 1.0, 0.45], BLUE = [0.25, 0.45, 1.0];
+  for (const rw of FEAT.runways) {
+    if (rw.kind !== 'paved') continue;
+    const o = rw.w / 2 + 1.5;
+    along(rw.pts, 60, (x, z, tx, tz) => { put(x - tz * o, z + tx * o, WHITE, 1.1); put(x + tz * o, z - tx * o, WHITE, 1.1); });
+    for (const [p, q] of [[rw.pts[0], rw.pts[1]], [rw.pts[rw.pts.length - 1], rw.pts[rw.pts.length - 2]]]) {
+      const l = Math.hypot(q[0] - p[0], q[1] - p[1]), tx = (q[0] - p[0]) / l, tz = (q[1] - p[1]) / l;
+      for (let i = 0; i <= 10; i++) { const v = -o + 2 * o * i / 10; put(p[0] - tz * v - tx * 1.5, p[1] + tx * v - tz * 1.5, GREEN, 1.2); }
+    }
+  }
+  for (const t of FEAT.taxiways) { const o = t.w / 2 + 0.8; along(t.pts, 45, (x, z, tx, tz) => { put(x - tz * o, z + tx * o, BLUE, 0.7); put(x + tz * o, z - tx * o, BLUE, 0.7); }); }
+}
+// all light points in one draw: additive glows that stay a few pixels wide far away
+const lightMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: U.uTime, uLightK: U.uLightK, uScale: { value: 400 } },
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: /* glsl */`
+    attribute vec3 color; attribute vec2 aSP; uniform float uTime, uLightK, uScale; varying vec3 vC; varying float vA;
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    void main(){
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      float blink = aSP.y < 0.0 ? 1.0 : 0.15 + 0.85 * step(fract(uTime * 0.8 + aSP.y), 0.16);
+      gl_PointSize = clamp(aSP.x * uScale / -mv.z, 3.5, 56.0) * (0.6 + 0.4 * uLightK);
+      vC = color; vA = blink * uLightK;
+      gl_Position = projectionMatrix * mv;
+      #include <logdepthbuf_vertex>
+    }`,
+  fragmentShader: /* glsl */`
+    varying vec3 vC; varying float vA;
+    #include <logdepthbuf_pars_fragment>
+    void main(){
+      #include <logdepthbuf_fragment>
+      vec2 q = gl_PointCoord * 2.0 - 1.0; float r2 = dot(q, q); if (r2 > 1.0) discard;
+      float core = exp(-r2 * 9.0), halo = exp(-r2 * 2.5) * 0.35;
+      gl_FragColor = vec4(vC * (core * 3.0 + halo) * vA, 1.0);
+    }`,
+});
+function buildLightSprites() {
+  const n = SPRITES.length, pos = new Float32Array(n * 3), colr = new Float32Array(n * 3), sp = new Float32Array(n * 2);
+  SPRITES.forEach((s, i) => { pos.set(s.slice(0, 3), i * 3); colr.set(s.slice(3, 6), i * 3); sp[i * 2] = s[6]; sp[i * 2 + 1] = s[7]; });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.BufferAttribute(colr, 3)); g.setAttribute('aSP', new THREE.BufferAttribute(sp, 2));
+  const pts = new THREE.Points(g, lightMat); pts.frustumCulled = false; pts.renderOrder = 5; scene.add(pts);
+}
+// feed the nearest floodlights to the ground shaders (twice a second)
+let lampT = 0;
+function updateLamps(dt) {
+  lampT -= dt; if (lampT > 0 || !LAMPS.length) return; lampT = 0.5;
+  const c = camera.position, near = LAMPS.map(l => [(l[0] - c.x) ** 2 + (l[2] - c.z) ** 2, l]).sort((a, b) => a[0] - b[0]);
+  for (let i = 0; i < NLAMP; i++) { const l = near[i]; U.uLamps.value[i].set(...(l ? l[1] : [0, -1e5, 0, 0])); }
 }
 function buildingAt(x, z) {
   const list = bldGrid.get(Math.floor(x / BLD_CELL) + ',' + Math.floor(z / BLD_CELL)); if (!list) return null;
@@ -822,6 +989,29 @@ function drawMini() {
   c.strokeText('N', R / 2, 18); c.fillStyle = '#ece6da'; c.fillText('N', R / 2, 18);
   const bar = span / 4, bw = bar * s; c.fillStyle = 'rgba(20,18,16,.75)'; c.fillRect(14, R - 24, bw + 4, 10); c.fillStyle = '#ece6da'; c.fillRect(16, R - 22, bw, 6);
   c.textAlign = 'left'; c.strokeText(fmtSpan(bar), 24 + bw, R - 19); c.fillText(fmtSpan(bar), 24 + bw, R - 19);
+}
+
+/* ================= time of day ================= */
+// The terrain shadows are baked for one sun direction; dusk and night change the light's colour and strength, the sky and the fog.
+const lin = (r, g, b, k = 1) => new THREE.Vector3(r ** 2.2 * k, g ** 2.2 * k, b ** 2.2 * k);
+const TIMES = {
+  day:   { sun: lin(1.0, 0.90, 0.76, 3.2), amb: lin(0.55, 0.66, 0.82, 0.95), sky: [1, 1, 1], glow: 1.0, night: 0, lamp: 0, light: 0.18,
+           hemi: 1.1, sunI: 3.0, sunC: 0xffe6c8, exp: 1.0, fog: 0xc6cacb, dust: 0xcdb898, nav: 0 },
+  dusk:  { sun: lin(1.0, 0.76, 0.58, 1.35), amb: lin(0.56, 0.54, 0.66, 0.5), sky: [0.74, 0.62, 0.64], glow: 1.5, night: 0.12, lamp: 0.55, light: 0.8,
+           hemi: 0.45, sunI: 1.3, sunC: 0xffb48a, exp: 1.05, fog: 0x8f7f84, dust: 0x8a7a6a, nav: 1.2 },
+  night: { sun: lin(0.55, 0.65, 0.90, 0.2), amb: lin(0.24, 0.30, 0.48, 0.13), sky: [0.045, 0.06, 0.12], glow: 0.04, night: 1, lamp: 1, light: 1,
+           hemi: 0.1, sunI: 0.22, sunC: 0x9fb4e0, exp: 1.55, fog: 0x141922, dust: 0x2a2622, nav: 3 },
+};
+const NAV_MATS = [];
+let timeOfDay = 'day';
+function setTime(id) {
+  const t = TIMES[id]; timeOfDay = id;
+  U.uSunC.value.copy(t.sun); U.uAmbC.value.copy(t.amb); U.uSkyK.value.set(...t.sky);
+  U.uSunGlow.value = t.glow; U.uNight.value = t.night; U.uLampK.value = t.lamp; U.uLightK.value = t.light;
+  hemi.intensity = t.hemi; sun.intensity = t.sunI; sun.color.set(t.sunC); renderer.toneMappingExposure = t.exp;
+  scene.fog.color.set(t.fog); dustPts.material.color.set(t.dust); scene.environmentIntensity = 0.35 * Math.min(1, t.hemi);
+  for (const m of NAV_MATS) m.emissive.copy(m.color).multiplyScalar(t.nav);
+  ['day', 'dusk', 'night'].forEach(k => $('t' + k[0].toUpperCase() + k.slice(1)).setAttribute('aria-pressed', k === id));
 }
 
 /* ================= helicopter (your Little Bird + flight model) ================= */
@@ -1038,6 +1228,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyV') recentreCam();
   if (e.code === 'KeyH') $('card').hidden = !$('card').hidden;
   if (e.code === 'KeyZ') cycleMini(e.shiftKey ? -1 : 1);
+  if (e.code === 'KeyT') setTime({ day: 'dusk', dusk: 'night', night: 'day' }[timeOfDay]);
   if (e.code === 'KeyM') { muted = !muted; startAudio(); }
 });
 ['ldBench', 'ldGuns', 'ldClean'].forEach(id => $(id).onclick = () => setLoadout(id));
@@ -1047,6 +1238,7 @@ $('spawn').onchange = () => { resetHeli(); showPrompt(); canvas.focus(); };
 $('res').onchange = e => { resScale = +e.target.value; setPR(); resize(); };
 $('gVeg').onclick = e => { VEG.on = !VEG.on; e.currentTarget.setAttribute('aria-pressed', VEG.on); bushes.visible = joshuas.visible = VEG.on; };
 $('gLbl').onclick = e => { showLabels = !showLabels; e.currentTarget.setAttribute('aria-pressed', showLabels); };
+$('tDay').onclick = () => setTime('day'); $('tDusk').onclick = () => setTime('dusk'); $('tNight').onclick = () => setTime('night');
 $('gFps').onclick = e => { const on = $('fps').hidden; $('fps').hidden = !on; e.currentTarget.setAttribute('aria-pressed', on); };
 $('toggleKeys').onclick = () => { const k = $('keys'); k.hidden = !k.hidden; $('toggleKeys').textContent = k.hidden ? 'Show controls' : 'Hide controls'; $('toggleKeys').setAttribute('aria-expanded', !k.hidden); };
 
@@ -1071,19 +1263,20 @@ const tick = () => new Promise(r => setTimeout(r, 0));
     status('Shading terrain…'); await tick();
     const { NM } = bakeMaps(); bar(0.75); await tick();
     buildPyramid(); initLabels();
-    status('Building the airfield…'); FEAT = await featP; buildAirfield(); buildMini(NM); bar(0.85);
+    status('Building the airfield…'); FEAT = await featP; buildAirfield(); Object.assign(window.littlebird, { doors: DOORS, ground: physGround }); buildMini(NM); bar(0.85);
     status('Loading Little Bird…');
     const gltf = await modelP;
     heli = gltf.scene; window.littlebird.heli = heli;
     heli.traverse(o => { if (o.isMesh) { o.castShadow = !o.material.transparent; o.receiveShadow = true; if (o.material.transparent) o.material.envMapIntensity = 0.15; } });
     scene.add(heli);
-    setLoadout('ldBench'); setHandling('hStd'); resetHeli();
+    heli.traverse(o => { if (o.isMesh && /^Nav(Red|Green)/.test(o.material.name) && o.material.emissive) NAV_MATS.push(o.material); });
+    setLoadout('ldBench'); setHandling('hStd'); setTime('day'); resetHeli();
     bar(1); ready = true; showPrompt();
   } catch (err) { status('Could not load: ' + (err?.message || err)); console.error(err); }
 })();
 
 /* ================= loop ================= */
-function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); lightMat.uniforms.uScale.value = h * renderer.getPixelRatio() / (2 * Math.tan(camera.fov * Math.PI / 360)); }
 addEventListener('resize', resize); resize();
 let last = performance.now(), fpsAcc = 0, fpsN = 0, fpsT = 0;
 const _sc = new THREE.Vector3();
@@ -1102,7 +1295,7 @@ renderer.setAnimationLoop(now => {
     const gy = groundHeight(fm.position.x, fm.position.z), t = (fm.position.y - gy) / sunDir.y;
     _sc.copy(fm.position).addScaledVector(sunDir, -t); U.shC.value.copy(_sc); U.shK.value = 0.55 * (1 - sstep(fm.position.y - gy, 15, 90));
     if (VEG.on && Math.hypot(camera.position.x - VEG.cx, camera.position.z - VEG.cz) > 90) placeVeg(camera.position.x, camera.position.z);
-    U.camPos.value.copy(camera.position); sky.position.copy(camera.position);
+    U.camPos.value.copy(camera.position); sky.position.copy(camera.position); U.uTime.value += dt; updateLamps(dt);
     updateTiles(); updateLabels(); drawMini();
   }
   renderer.render(scene, camera);
