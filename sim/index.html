@@ -39,8 +39,8 @@ body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--f-mono);overflow
 #warn{left:50%;transform:translateX(-50%);top:24%;text-align:center;font:700 20px var(--f-ui);letter-spacing:.08em;color:var(--warn);text-shadow:0 1px 3px #000}
 #warn .amb{color:var(--amber)}
 #cross{left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;opacity:.75}
-#miniW{right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));padding:6px}
-#mini{display:block;width:min(200px,30vmin);height:min(200px,30vmin);border-radius:4px}
+#miniW{right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));padding:6px;pointer-events:auto;cursor:zoom-in}
+#mini{display:block;width:min(240px,34vmin);height:min(240px,34vmin);border-radius:4px}
 #miniT{font-size:10px;color:var(--muted);text-align:center;margin-top:3px;font-variant-numeric:tabular-nums}
 #fps{left:max(16px,env(safe-area-inset-left,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));padding:4px 8px;font-size:11px;color:var(--muted);white-space:pre}
 .lbl{position:fixed;z-index:2;pointer-events:none;transform:translate(-50%,-100%);font-size:11px;letter-spacing:.05em;color:var(--ink);text-shadow:0 1px 2px #000,0 0 6px rgba(0,0,0,.6);white-space:nowrap;text-align:center}
@@ -71,7 +71,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 .stick i{position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;background:rgba(236,230,218,.25);border:1px solid rgba(236,230,218,.5)}
 .stick b{position:absolute;left:0;right:0;top:-18px;text-align:center;font:500 10px var(--f-mono);color:var(--muted)}
 #stL{left:max(24px,env(safe-area-inset-left,0px))}
-#stR{right:max(24px,env(safe-area-inset-right,0px));bottom:calc(24px + env(safe-area-inset-bottom,0px) + min(200px,30vmin) + 30px)}
+#stR{right:max(24px,env(safe-area-inset-right,0px));bottom:calc(24px + env(safe-area-inset-bottom,0px) + min(240px,34vmin) + 34px)}
 #tBtns{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));display:flex;gap:8px;pointer-events:auto}
 #tBtns button{background:var(--chip);padding:8px 12px}
 @media (max-width:640px){
@@ -100,7 +100,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 <div class="hud panel" id="hdg">HDG 000</div>
 <div class="hud" id="warn"></div>
 <svg class="hud" id="cross" viewBox="0 0 30 30" aria-hidden="true"><g stroke="#9fe3b0" stroke-width="1.5" fill="none"><path d="M15 3v8M15 19v8M3 15h8M19 15h8"/><circle cx="15" cy="15" r="1.4" fill="#9fe3b0"/></g></svg>
-<div class="hud panel" id="miniW"><canvas id="mini" width="400" height="400" aria-label="Map of the 82 km area"></canvas><div id="miniT">37.26° N 115.80° W</div></div>
+<div class="hud panel" id="miniW"><canvas id="mini" width="480" height="480" aria-label="Map around the helicopter; click to zoom"></canvas><div id="miniT">37.26° N 115.80° W</div></div>
 <div class="hud panel" id="fps" hidden></div>
 <div id="labels"></div>
 
@@ -151,6 +151,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
     <kbd>C · O</kbd><span>Cockpit · inspect camera</span>
     <kbd>R</kbd><span>Reset to the start</span>
     <kbd>H</kbd><span>Hide this panel</span>
+    <kbd>Z · Shift+Z</kbd><span>Zoom the map in / out (or click or scroll it)</span>
     <kbd>M</kbd><span>Rotor sound on / off</span>
     <kbd>Pad</kbd><span>Left stick collective / yaw, right stick cyclic</span>
   </div>
@@ -743,12 +744,16 @@ function updateLabels() {
   }
 }
 
-/* ================= minimap ================= */
-const mini = $('mini'), mctx = mini.getContext('2d'); let miniBase = null;
+/* ================= minimap: zoomable, north up, centred on the helicopter ================= */
+// Base: a 2048 px hillshade of the whole map (40 m per pixel). Airfield features are Path2Ds in world metres,
+// drawn at their real widths, so they stay crisp at every zoom.
+const mini = $('mini'), mctx = mini.getContext('2d'); let miniBase = null, miniFeat = null;
+const MINI_SPANS = [S, 24000, 8000, 3000, 1200];   // metres across the map at each zoom step
+let miniZoom = 2;
 function buildMini(NM) {
-  const R = 400, c = document.createElement('canvas'); c.width = c.height = R; const x = c.getContext('2d'), img = x.createImageData(R, R);
+  const R = GN - 1, c = document.createElement('canvas'); c.width = c.height = R; const x = c.getContext('2d'), img = x.createImageData(R, R);
   for (let v = 0; v < R; v++) for (let u = 0; u < R; u++) {
-    const i = Math.round(u / (R - 1) * (GN - 1)), j = Math.round(v / (R - 1) * (GN - 1)), k = j * GN + i;
+    const k = v * GN + u;
     const nx = NM[k * 4] / 127.5 - 1, ny = NM[k * 4 + 1] / 127.5 - 1, nz = NM[k * 4 + 2] / 127.5 - 1, pl = NM[k * 4 + 3] / 255;
     const sh = clamp(0.35 + 0.9 * (nx * sunDir.x + ny * sunDir.y + nz * sunDir.z), 0, 1.3), t = (H[k] - HMIN) / (HMAX - HMIN);
     let r = 150 + 50 * t, g = 128 + 40 * t, b = 100 + 40 * t;
@@ -756,23 +761,67 @@ function buildMini(NM) {
     const o = (v * R + u) * 4; img.data[o] = r * sh; img.data[o + 1] = g * sh; img.data[o + 2] = b * sh; img.data[o + 3] = 255;
   }
   x.putImageData(img, 0, 0); miniBase = c;
+  if (FEAT) buildMiniFeatures();
 }
+function buildMiniFeatures() {
+  const line = pts => { const p = new Path2D(); pts.forEach(([x, z], i) => i ? p.lineTo(x, z) : p.moveTo(x, z)); return p; };
+  const ring = (p, r) => { r.forEach(([x, z], i) => i ? p.lineTo(x, z) : p.moveTo(x, z)); p.closePath(); };
+  const STYLE = { lakebed: ['#8f8778', 0.6], dirt: ['#8a7a62', 0.6], stopway: ['#55524d', 1], paved: ['#cfccc4', 1] };
+  const aprons = new Path2D(), pads = new Path2D(), hangars = new Path2D(), blds = new Path2D(), taxi = new Path2D();
+  FEAT.aprons.forEach(r => ring(aprons, r)); FEAT.helipads.forEach(r => ring(pads, r));
+  FEAT.buildings.forEach(b => ring(b.c === 'hangar' ? hangars : blds, b.r));
+  FEAT.taxiways.forEach(t => taxi.addPath(line(t.pts)));
+  const order = ['lakebed', 'dirt', 'stopway', 'paved'];
+  const strips = FEAT.runways.slice().sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))
+    .map(r => ({ p: line(r.pts), w: r.w, c: STYLE[r.kind][0], a: STYLE[r.kind][1], paved: r.kind === 'paved' }));
+  miniFeat = { aprons, pads, hangars, blds, taxi, strips };
+}
+function cycleMini(dir) { miniZoom = (miniZoom + dir + MINI_SPANS.length) % MINI_SPANS.length; }
+$('miniW').addEventListener('click', e => { e.stopPropagation(); cycleMini(1); });
+$('miniW').addEventListener('contextmenu', e => { e.preventDefault(); cycleMini(-1); });
+$('miniW').addEventListener('wheel', e => { e.preventDefault(); e.stopPropagation(); miniZoom = clamp(miniZoom + (e.deltaY > 0 ? -1 : 1), 0, MINI_SPANS.length - 1); }, { passive: false });
+const fmtSpan = m => m >= 10000 ? Math.round(m / 1000) + ' km' : m >= 1000 ? (m / 1000).toFixed(1).replace('.0', '') + ' km' : m + ' m';
 const _mf = new THREE.Vector3();
 function drawMini() {
   if (!miniBase) return;
-  const R = 400; mctx.drawImage(miniBase, 0, 0);
-  const m = (x, z) => [(x + HALF) / S * R, (z + HALF) / S * R];
-  mctx.font = '600 15px IBM Plex Mono, monospace'; mctx.textAlign = 'left';
-  for (const p of PLACES) { const [u, v] = m(p.x, p.z); mctx.fillStyle = 'rgba(20,18,16,.8)'; mctx.beginPath(); mctx.arc(u, v, 4, 0, 6.3); mctx.fill(); }
-  const [u, v] = m(fm.position.x, fm.position.z);
+  const R = mini.width, span = MINI_SPANS[miniZoom], s = R / span, c = mctx;
+  const cx = miniZoom === 0 ? 0 : fm.position.x, cz = miniZoom === 0 ? 0 : fm.position.z;
+  const W = (x, z) => [(x - cx) * s + R / 2, (z - cz) * s + R / 2];
+  c.setTransform(1, 0, 0, 1, 0, 0); c.fillStyle = '#2a2723'; c.fillRect(0, 0, R, R);
+  // hillshade: crop the part of the 2048 px base under the view
+  const px = (cx - span / 2 + HALF) / CELL, pz = (cz - span / 2 + HALF) / CELL, pw = span / CELL;
+  c.imageSmoothingEnabled = true; c.drawImage(miniBase, px, pz, pw, pw, 0, 0, R, R);
+  if (miniFeat) {
+    const F = miniFeat, px1 = 1 / s;   // one canvas pixel, in metres
+    c.setTransform(s, 0, 0, s, R / 2 - cx * s, R / 2 - cz * s); c.lineCap = 'round'; c.lineJoin = 'round';
+    c.fillStyle = '#b9b5ab'; c.fill(F.aprons); c.fillStyle = '#e4e0d6'; c.fill(F.pads);
+    for (const st of F.strips) { c.globalAlpha = st.a; c.strokeStyle = st.c; c.lineWidth = Math.max(st.w, (st.paved ? 3 : 1.5) * px1); c.stroke(st.p); }
+    c.globalAlpha = 1;
+    c.strokeStyle = '#6f6b64'; c.lineWidth = Math.max(18, 1.2 * px1); c.stroke(F.taxi);
+    if (span <= 3000) { c.strokeStyle = '#c99a2e'; c.lineWidth = Math.max(0.6, 0.8 * px1); c.stroke(F.taxi); }
+    c.fillStyle = '#4a4741'; c.fill(F.blds); c.fillStyle = '#2f3a44'; c.fill(F.hangars);
+    if (span <= 3000) { c.strokeStyle = 'rgba(20,18,16,.6)'; c.lineWidth = 0.8 * px1; c.stroke(F.blds); c.stroke(F.hangars); }
+    c.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  // places
+  c.font = '600 22px IBM Plex Mono, monospace'; c.textAlign = 'left'; c.textBaseline = 'middle';
+  for (const p of PLACES) {
+    const [u, v] = W(p.x, p.z); if (u < -40 || v < -40 || u > R + 40 || v > R + 40) continue;
+    c.fillStyle = 'rgba(20,18,16,.85)'; c.beginPath(); c.arc(u, v, 5, 0, 6.3); c.fill();
+    if (miniZoom > 0 && span <= 24000) { const n = p.n.startsWith('Area 51') ? 'Area 51' : p.n; c.lineWidth = 4; c.strokeStyle = 'rgba(20,18,16,.75)'; c.strokeText(n, u + 9, v); c.fillStyle = '#ece6da'; c.fillText(n, u + 9, v); }
+  }
+  // helicopter
+  const [u, v] = W(fm.position.x, fm.position.z);
   _mf.set(0, 0, 1).applyQuaternion(fm.quaternion); const a = Math.atan2(_mf.x, -_mf.z);
-  mctx.save(); mctx.translate(u, v); mctx.rotate(a);
-  mctx.fillStyle = '#f2b84b'; mctx.strokeStyle = '#1b1a17'; mctx.lineWidth = 2.5;
-  mctx.beginPath(); mctx.moveTo(0, -13); mctx.lineTo(8, 9); mctx.lineTo(0, 4); mctx.lineTo(-8, 9); mctx.closePath(); mctx.stroke(); mctx.fill();
-  mctx.restore();
-  if (FEAT) { mctx.strokeStyle = 'rgba(40,38,34,.9)'; mctx.lineCap = 'round';
-    for (const r of FEAT.runways) { mctx.lineWidth = r.kind === 'paved' ? 3 : 1.5; mctx.beginPath(); r.pts.forEach(([x, z], i) => { const [u, v] = m(x, z); i ? mctx.lineTo(u, v) : mctx.moveTo(u, v); }); mctx.stroke(); } }
-  mctx.fillStyle = '#ece6da'; mctx.fillText('N', R / 2 - 5, 18);
+  c.save(); c.translate(u, v); c.rotate(a);
+  c.fillStyle = '#f2b84b'; c.strokeStyle = '#1b1a17'; c.lineWidth = 3;
+  c.beginPath(); c.moveTo(0, -17); c.lineTo(11, 12); c.lineTo(0, 5); c.lineTo(-11, 12); c.closePath(); c.stroke(); c.fill();
+  c.restore();
+  // north mark and scale bar
+  c.font = '600 22px IBM Plex Mono, monospace'; c.textAlign = 'center'; c.lineWidth = 4; c.strokeStyle = 'rgba(20,18,16,.75)';
+  c.strokeText('N', R / 2, 18); c.fillStyle = '#ece6da'; c.fillText('N', R / 2, 18);
+  const bar = span / 4, bw = bar * s; c.fillStyle = 'rgba(20,18,16,.75)'; c.fillRect(14, R - 24, bw + 4, 10); c.fillStyle = '#ece6da'; c.fillRect(16, R - 22, bw, 6);
+  c.textAlign = 'left'; c.strokeText(fmtSpan(bar), 24 + bw, R - 19); c.fillText(fmtSpan(bar), 24 + bw, R - 19);
 }
 
 /* ================= helicopter (your Little Bird + flight model) ================= */
@@ -898,7 +947,7 @@ function updateHUD(dt) {
   const vf = $('vsFill'), v = clamp(t.verticalSpeed / 15, -1, 1);
   vf.style.height = Math.abs(v) * 50 + '%'; vf.style.bottom = v >= 0 ? '50%' : (50 - Math.abs(v) * 50) + '%'; vf.style.background = v < -0.5 ? 'var(--amber)' : 'var(--phos)';
   drawADI(t.pitch, t.roll);
-  const [la, lo] = toLL(fm.position.x, fm.position.z); $('miniT').textContent = la.toFixed(3) + '° N  ' + Math.abs(lo).toFixed(3) + '° W';
+  const [la, lo] = toLL(fm.position.x, fm.position.z); $('miniT').textContent = la.toFixed(3) + '° N  ' + Math.abs(lo).toFixed(3) + '° W  ·  ' + fmtSpan(MINI_SPANS[miniZoom]);
   const w = [];
   if (t.crashed) w.push(['', crashMsg.toUpperCase() + ' · R TO RESET']);
   else {
@@ -988,6 +1037,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyO') setCam(camMode === 'orbit' ? 'chase' : 'orbit');
   if (e.code === 'KeyV') recentreCam();
   if (e.code === 'KeyH') $('card').hidden = !$('card').hidden;
+  if (e.code === 'KeyZ') cycleMini(e.shiftKey ? -1 : 1);
   if (e.code === 'KeyM') { muted = !muted; startAudio(); }
 });
 ['ldBench', 'ldGuns', 'ldClean'].forEach(id => $(id).onclick = () => setLoadout(id));

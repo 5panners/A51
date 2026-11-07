@@ -41,6 +41,7 @@ The viewer works the same way (`--directory viewer`), or just open `viewer/index
 | C · O | Cockpit · inspect camera |
 | R | Reset to the chosen start |
 | H | Hide the menu |
+| Z · Shift+Z | Zoom the minimap in / out (or click or scroll it) |
 | M | Rotor sound on / off |
 | Gamepad | Left stick collective / yaw, right stick cyclic |
 
@@ -53,6 +54,7 @@ On touch screens two on-screen sticks appear. Start points: the threshold of run
 - **Rendering:** a quadtree picks terrain tiles by distance (1.28 km tiles up close, coarser farther out). Every tile is the same 33 × 33 grid, displaced on the GPU from a float height texture, and all of them draw in one instanced call. Skirts hide cracks between detail levels.
 - **Shading:** normals, a lakebed mask and mountain shadows are baked once at load. Ground colour comes from height and slope, not satellite imagery. Close-up detail noise, distance and height haze, ACES tone mapping and a logarithmic depth buffer handle the 0.1 m – 180 km depth range.
 - **Near the camera:** instanced scrub, junipers and Joshua trees within ~650 m, a blob shadow cast along the sun, and rotor dust in ground effect.
+- **Minimap:** north-up and centred on the helicopter, with five zoom steps (82 km to 1.2 km). Click, scroll or press Z (Shift+Z zooms out). A 2048 px hillshade sits under the runways, taxiways, aprons, helipads and buildings, which are drawn at their real widths so they stay sharp when zoomed in. Hangars are drawn in blue-grey.
 - **Airfield:** `sim/groom-features.json` holds the runways, lakebed strips, stopways, taxiways, aprons, helipads and 310 building footprints from OpenStreetMap (via Overture Maps), already in the sim's metre frame. Paved surfaces are draped strips sampled every 12 m. One shader paints the markings (runway 14/32 numbers, threshold bars, aiming points, touchdown-zone rubber, centrelines, taxiway lines, stopway chevrons) and lifts the surfaces slightly with distance so coarse far terrain never covers them. Buildings are extruded footprints in one merged mesh. You can land on roofs; flying into a wall is a crash.
 - **Helicopter:** `littlebird.glb.b64.txt` (the model) and `littlebird-flight.js` (the flight model) come unchanged from the *Little Bird Test Flight* project. The physics samples the same height grid the GPU draws, using the same triangle split, so the skids touch the visible ground.
 
