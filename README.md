@@ -8,7 +8,14 @@ A browser helicopter sim over the real terrain around Groom Lake (Area 51), Linc
 | `viewer/` | **Groom Lake Terrain.** An orbitable 3D model of the same region with hover elevation readout, sun and height controls. Self-contained single file. |
 | `tools/` | Scripts that download the elevation data and rebuild both terrain files, and a headless smoke test for the sim. |
 
-## Run it
+## Play online
+
+- Sim: https://5panners.github.io/a51/
+- Terrain viewer: https://5panners.github.io/a51/viewer/
+
+`.github/workflows/pages.yml` redeploys both on every push to `main` that touches `sim/` or `viewer/`. One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+## Run it locally
 
 Both pages are static files. The sim fetches its data files, so serve the folder rather than opening the file directly:
 
